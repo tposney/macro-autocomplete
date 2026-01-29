@@ -1,0 +1,29 @@
+{
+	"compilerOptions": {
+		"target": "ESNext",
+		"module": "ESNext",
+		"lib": [ "DOM", "ESNext" ],
+		"allowJs": true,
+		"checkJs": false,
+		"useDefineForClassFields": true,
+		"resolveJsonModule": true,
+		"sourceMap": false,
+		"outDir": "./dist/src",
+		"noEmit": false,
+		"isolatedModules": false,
+		"strict": true,
+		"noImplicitAny": false,
+		"strictNullChecks": true,
+		"noImplicitThis": false,
+		"noUnusedLocals": false,
+		"noUnusedParameters": false,
+		"noImplicitReturns": false,
+		"noImplicitOverride": false,
+		"moduleResolution": "bundler",
+		"types": [ "fvtt-types" ],
+		"esModuleInterop": true,
+		"newLine": "lf",
+		"skipLibCheck": true,
+		"forceConsistentCasingInFileNames": true
+	}
+}

@@ -1,0 +1,37 @@
+{
+	"name": "macro-autocomplete",
+	"title": "Macro Autocomplete",
+	"version": "1.0.0",
+	"description": "Autocompletion for Foundry VTT macro editors using CodeMirror 6",
+	"devDir": "/home/timp/foundry-data/foundryv13/Data/modules/",
+	"main": "src/macro-autocomplete.ts",
+	"scripts": {
+		"build": "npx gulp",
+		"watch": "npx gulp watch",
+		"clean": "npx gulp clean",
+		"devbuild": "npx gulp dev",
+		"devwatch": "npx gulp devWatch",
+		"devclean": "npx gulp devClean",
+		"release": "npx gulp zip",
+		"generate:completions": "node scripts/generateFoundryCompletions.js"
+	},
+	"prettier": {
+		"tabWidth": 2,
+		"semi": true,
+		"quoteProps": "consistent",
+		"trailingComma": "all",
+		"printWidth": 120
+	},
+	"devDependencies": {
+		"esbuild": "^0.24.0",
+		"del": "^6.0.0",
+		"fvtt-types": "github:League-of-Foundry-Developers/foundry-vtt-types#main",
+		"gulp": "^4.0.2",
+		"gulp-cli": "^2.3.0",
+		"gulp-rename": "^2.0.0",
+		"gulp-typescript": "^6.0.0-alpha.1",
+		"gulp-zip": "^5.0.2",
+		"json-stringify-pretty-compact": "^3.0.0",
+		"typescript": "~5.7"
+	}
+}
