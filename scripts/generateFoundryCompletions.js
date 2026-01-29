@@ -12,9 +12,10 @@ const fs = require("fs");
 const path = require("path");
 
 // Types we want to extract completions for
-// Format: typeName -> { paths: [...], preferFile: "partial/path" }
+// Format: typeName -> { paths: [...], preferFile: "partial/path", instancePath?: "variable_name" }
+// instancePath: if set, instance members go to this variable name, static members go to the class name
 const TARGET_TYPES = {
-  // Global objects - these map to completion paths
+  // Global objects - these map to completion paths (no static/instance split needed)
   "Game": { paths: ["game"], preferFile: "/client/game.d.mts" },
   "Canvas": { paths: ["canvas"], preferFile: "/canvas/" },
   "ClientSettings": { paths: ["game.settings"] },
@@ -24,12 +25,13 @@ const TARGET_TYPES = {
   "Notifications": { paths: ["ui.notifications"] },
 
   // Document classes - prefer files in /documents/ folder
-  "Actor": { paths: ["Actor"], preferFile: "/documents/actor" },
-  "Item": { paths: ["Item"], preferFile: "/documents/item" },
+  // instancePath tells where instance members should go
+  "Actor": { paths: ["Actor"], instancePath: "actor", preferFile: "/documents/actor" },
+  "Item": { paths: ["Item"], instancePath: "item", preferFile: "/documents/item" },
   "ChatMessage": { paths: ["ChatMessage"], preferFile: "/documents/chat-message" },
   "Roll": { paths: ["Roll"], preferFile: "/dice/roll" },
   "ActiveEffect": { paths: ["ActiveEffect"], preferFile: "/documents/active-effect" },
-  "Token": { paths: ["Token"], preferFile: "/canvas/token" },
+  "Token": { paths: ["Token"], instancePath: "token", preferFile: "/canvas/token" },
   "TokenDocument": { paths: ["TokenDocument"], preferFile: "/documents/token" },
   "Scene": { paths: ["Scene"], preferFile: "/documents/scene" },
   "Combat": { paths: ["Combat"], preferFile: "/documents/combat" },
@@ -97,6 +99,32 @@ function getJSDocComment(node) {
 }
 
 function extractMemberInfo(member, sourceFile) {
+  // Handle constructors first (they don't have a name property)
+  if (ts.isConstructorDeclaration(member)) {
+    const jsDoc = getJSDocComment(member);
+    const params = [];
+    if (member.parameters) {
+      for (const param of member.parameters) {
+        try {
+          const paramName = param.name.getText(sourceFile);
+          const optional = param.questionToken ? "?" : "";
+          params.push(`${paramName}${optional}`);
+        } catch {
+          params.push("arg");
+        }
+      }
+    }
+    return {
+      name: "__constructor",
+      entry: {
+        type: "constructor",
+        detail: `(${params.join(", ")})`,
+        info: jsDoc || undefined,
+      },
+      isStatic: true, // constructors are class-level
+    };
+  }
+
   let name;
   try {
     name = member.name?.getText(sourceFile);
@@ -107,10 +135,13 @@ function extractMemberInfo(member, sourceFile) {
   if (!name || name.startsWith("_") || name.startsWith("#")) return null;
 
   // Skip certain noisy members
-  const skipNames = ["constructor", "prototype", "toString", "valueOf", "toJSON",
+  const skipNames = ["prototype", "toString", "valueOf", "toJSON",
     "hasOwnProperty", "isPrototypeOf", "propertyIsEnumerable", "toLocaleString",
     "then", "catch", "finally"];
   if (skipNames.includes(name)) return null;
+
+  // Detect static modifier
+  const isStatic = member.modifiers?.some(m => m.kind === ts.SyntaxKind.StaticKeyword) || false;
 
   const jsDoc = getJSDocComment(member);
 
@@ -133,6 +164,7 @@ function extractMemberInfo(member, sourceFile) {
 
     return {
       name,
+      isStatic,
       entry: {
         type: "method",
         detail: `(${params.join(", ")}) => ${returnType}`,
@@ -145,9 +177,23 @@ function extractMemberInfo(member, sourceFile) {
 
     return {
       name,
+      isStatic,
       entry: {
         type: "property",
         detail: propType,
+        info: jsDoc || undefined,
+      }
+    };
+  } else if (ts.isGetAccessor(member)) {
+    // Getter property
+    const returnType = member.type ? getTypeString(member.type, sourceFile) : "any";
+
+    return {
+      name,
+      isStatic,
+      entry: {
+        type: "property",
+        detail: returnType,
         info: jsDoc || undefined,
       }
     };
@@ -158,11 +204,13 @@ function extractMemberInfo(member, sourceFile) {
 
 function extractTypeMembers(decl, sourceFile) {
   const typeName = decl.name?.getText(sourceFile) || "unknown";
+  const isClass = ts.isClassDeclaration(decl);
 
   const entry = {
-    type: ts.isClassDeclaration(decl) ? "class" : "object",
+    type: isClass ? "class" : "object",
     detail: typeName,
-    children: {},
+    staticChildren: {},
+    instanceChildren: {},
   };
 
   let memberCount = 0;
@@ -173,16 +221,15 @@ function extractTypeMembers(decl, sourceFile) {
 
     const info = extractMemberInfo(member, sourceFile);
     if (info) {
-      entry.children[info.name] = info.entry;
+      if (info.name === "__constructor") {
+        // Store constructor info on the entry itself
+        entry.constructorDetail = `${info.entry.detail} => ${typeName}`;
+      } else if (info.isStatic) {
+        entry.staticChildren[info.name] = info.entry;
+      } else {
+        entry.instanceChildren[info.name] = info.entry;
+      }
       memberCount++;
-    }
-  }
-
-  // Also check heritage clauses for extended interfaces
-  if (decl.heritageClauses) {
-    for (const heritage of decl.heritageClauses) {
-      // Could recursively resolve parent types here
-      // For now, just note it in the info
     }
   }
 
@@ -314,11 +361,38 @@ function generateCompletions() {
 
     try {
       const entry = extractTypeMembers(best.node, best.sourceFile);
-      completions[typeName] = entry;
+      const config = TARGET_TYPES[typeName];
 
-      const childCount = Object.keys(entry.children || {}).length;
+      const output = {
+        type: entry.type,
+        detail: entry.detail,
+      };
+
+      // Include constructor detail if found
+      if (entry.constructorDetail) {
+        output.constructorDetail = entry.constructorDetail;
+      }
+
+      // Include instancePath from config
+      if (config?.instancePath) {
+        output.instancePath = config.instancePath;
+      }
+
+      // Include static and instance children separately
+      if (Object.keys(entry.staticChildren).length > 0) {
+        output.staticChildren = entry.staticChildren;
+      }
+      if (Object.keys(entry.instanceChildren).length > 0) {
+        output.instanceChildren = entry.instanceChildren;
+      }
+
+      completions[typeName] = output;
+
+      const staticCount = Object.keys(entry.staticChildren).length;
+      const instanceCount = Object.keys(entry.instanceChildren).length;
       const shortPath = best.fileName.replace(/.*fvtt-types\/src\//, "");
-      console.log(`  ${typeName}: ${childCount} members (from ${shortPath})`);
+      const ctorInfo = entry.constructorDetail ? `, ctor: ${entry.constructorDetail}` : "";
+      console.log(`  ${typeName}: ${staticCount} static + ${instanceCount} instance members (from ${shortPath})${ctorInfo}`);
     } catch (err) {
       console.error(`  Error processing ${typeName}:`, err.message);
     }
@@ -332,7 +406,7 @@ try {
   console.log("Generating Foundry completions from fvtt-types...\n");
   const completions = generateCompletions();
 
-  const outputPath = path.resolve(__dirname, "../src/module/lib/foundryCompletions.json");
+  const outputPath = path.resolve(__dirname, "../src/lib/foundryCompletions.json");
   fs.writeFileSync(outputPath, JSON.stringify(completions, null, 2));
 
   console.log(`\nGenerated ${Object.keys(completions).length} completion entries`);

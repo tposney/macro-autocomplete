@@ -2,10 +2,36 @@
   "Dialog": {
     "type": "class",
     "detail": "Dialog",
-    "children": {
+    "constructorDetail": "(data, options?) => Dialog",
+    "staticChildren": {
+      "defaultOptions": {
+        "type": "property",
+        "detail": "Dialog.Options"
+      },
+      "confirm": {
+        "type": "method",
+        "detail": "(config?) => Promise<Yes | No | Dialog.OnReject<RejectClose, false>>",
+        "info": "A helper factory method to create simple confirmation dialog windows which consist of simple yes/no prompts.\nIf you require more flexibility, a custom Dialog instance is preferred."
+      },
+      "prompt": {
+        "type": "method",
+        "detail": "(config) => Promise<Value | Dialog.OnReject<RejectClose, true>>",
+        "info": "A helper factory method to display a basic \"prompt\" style Dialog with a single button"
+      },
+      "wait": {
+        "type": "method",
+        "detail": "(data, options?, renderOptions?) => Promise<unknown>",
+        "info": "Wrap the Dialog with an enclosing Promise which resolves or rejects when the client makes a choice."
+      }
+    },
+    "instanceChildren": {
       "data": {
         "type": "property",
         "detail": "Dialog.Data<JQuery | HTMLElement>"
+      },
+      "title": {
+        "type": "property",
+        "detail": "string"
       },
       "getData": {
         "type": "method",
@@ -23,33 +49,15 @@
       "close": {
         "type": "method",
         "detail": "(options?) => Promise<void>"
-      },
-      "confirm": {
-        "type": "method",
-        "detail": "(config?) => Promise<Yes | No | Dialog.OnReject<RejectClose, false>>",
-        "info": "A helper factory method to create simple confirmation dialog windows which consist of simple yes/no prompts.\nIf you require more flexibility, a custom Dialog instance is preferred."
-      },
-      "prompt": {
-        "type": "method",
-        "detail": "(config) => Promise<Value | Dialog.OnReject<RejectClose, true>>",
-        "info": "A helper factory method to display a basic \"prompt\" style Dialog with a single button"
-      },
-      "wait": {
-        "type": "method",
-        "detail": "(data, options?, renderOptions?) => Promise<unknown>",
-        "info": "Wrap the Dialog with an enclosing Promise which resolves or rejects when the client makes a choice."
       }
     }
   },
   "Item": {
     "type": "class",
     "detail": "Item",
-    "children": {
-      "getRollData": {
-        "type": "method",
-        "detail": "() => AnyObject",
-        "info": "Prepare a data object which defines the data schema used by dice roll commands against this Item"
-      },
+    "constructorDetail": "(data, context?) => Item",
+    "instancePath": "item",
+    "staticChildren": {
       "defaultName": {
         "type": "method",
         "detail": "(context?) => string"
@@ -57,10 +65,6 @@
       "createDialog": {
         "type": "method",
         "detail": "(data?, createOptions?, options?) => Promise<Item.Stored | null | undefined>"
-      },
-      "deleteDialog": {
-        "type": "method",
-        "detail": "(options?, operation?) => Promise<this | false | null | undefined>"
       },
       "fromDropData": {
         "type": "method",
@@ -70,12 +74,48 @@
         "type": "method",
         "detail": "(source, context?) => Promise<Item.Implementation>"
       }
+    },
+    "instanceChildren": {
+      "actor": {
+        "type": "property",
+        "detail": "Actor.Implementation | null",
+        "info": "A convenience alias of Item#parent which is more semantically intuitive"
+      },
+      "thumbnail": {
+        "type": "property",
+        "detail": "string",
+        "info": "Provide a thumbnail image path used to represent this document."
+      },
+      "isOwned": {
+        "type": "property",
+        "detail": "boolean",
+        "info": "A convenience alias of Item#isEmbedded which is preserves legacy support"
+      },
+      "transferredEffects": {
+        "type": "property",
+        "detail": "ActiveEffect.Implementation[]",
+        "info": "Return an array of the Active Effect instances which originated from this Item.\nThe returned instances are the ActiveEffect instances which exist on the Item itself."
+      },
+      "getRollData": {
+        "type": "method",
+        "detail": "() => AnyObject",
+        "info": "Prepare a data object which defines the data schema used by dice roll commands against this Item"
+      },
+      "deleteDialog": {
+        "type": "method",
+        "detail": "(options?, operation?) => Promise<this | false | null | undefined>"
+      }
     }
   },
   "Hooks": {
     "type": "class",
     "detail": "Hooks",
-    "children": {
+    "staticChildren": {
+      "events": {
+        "type": "property",
+        "detail": "Record<string, Hooks.HookedFunction[]>",
+        "info": "A mapping of hook events which have functions registered to them."
+      },
       "on": {
         "type": "method",
         "detail": "(hook, fn, options?) => number"
@@ -106,7 +146,30 @@
   "Canvas": {
     "type": "class",
     "detail": "Canvas",
-    "children": {
+    "constructorDetail": "() => Canvas",
+    "staticChildren": {
+      "layers": {
+        "type": "property",
+        "detail": "typeof CONFIG.Canvas.layers",
+        "info": "A mapping of named CanvasLayer classes which defines the layers which comprise the Scene."
+      },
+      "getSceneManager": {
+        "type": "method",
+        "detail": "(scene) => foundry.canvas.SceneManager.Any | null",
+        "info": "Create a SceneManager instance used for this Scene, if any."
+      },
+      "clearContainer": {
+        "type": "method",
+        "detail": "(displayObject, destroy?) => void",
+        "info": "Remove all children of the display object and call one cleaning method:\nclean first, then tearDown, and destroy if no cleaning method is found."
+      },
+      "getRenderTexture": {
+        "type": "method",
+        "detail": "(options?) => PIXI.RenderTexture",
+        "info": "Get a texture with the required configuration and clear color."
+      }
+    },
+    "instanceChildren": {
       "blurFilters": {
         "type": "property",
         "detail": "Set<PIXI.BlurFilter>",
@@ -252,6 +315,66 @@
         "detail": "boolean",
         "info": "Force snapping to grid vertices?"
       },
+      "initialized": {
+        "type": "property",
+        "detail": "boolean",
+        "info": "A flag for whether the game Canvas is fully initialized and ready for additional content to be drawn."
+      },
+      "scene": {
+        "type": "property",
+        "detail": "Scene.Stored | null",
+        "info": "A reference to the currently displayed Scene document, or null if the Canvas is currently blank."
+      },
+      "manager": {
+        "type": "property",
+        "detail": "foundry.canvas.SceneManager | null",
+        "info": "A SceneManager instance which adds behaviors to this Scene, or null if there is no manager."
+      },
+      "dimensions": {
+        "type": "property",
+        "detail": "Canvas.Dimensions | null",
+        "info": "The current pixel dimensions of the displayed Scene, or null if the Canvas is blank."
+      },
+      "grid": {
+        "type": "property",
+        "detail": "foundry.grid.BaseGrid | null",
+        "info": "A reference to the grid of the currently displayed Scene document, or null if the Canvas is currently blank."
+      },
+      "ready": {
+        "type": "property",
+        "detail": "boolean",
+        "info": "A flag for whether the game Canvas is ready to be used. False if the canvas is not yet drawn, true otherwise."
+      },
+      "colors": {
+        "type": "property",
+        "detail": "this[\"environment\"][\"colors\"]",
+        "info": "The colors bound to this scene and handled by the color manager."
+      },
+      "masks": {
+        "type": "property",
+        "detail": "PIXI.Container",
+        "info": "Shortcut to get the masks container from HiddenCanvasGroup."
+      },
+      "id": {
+        "type": "property",
+        "detail": "string | null",
+        "info": "The id of the currently displayed Scene."
+      },
+      "layers": {
+        "type": "property",
+        "detail": "layers.CanvasLayer[]",
+        "info": "An Array of all CanvasLayer instances which are active on the Canvas board"
+      },
+      "activeLayer": {
+        "type": "property",
+        "detail": "layers.CanvasLayer | null",
+        "info": "Return a reference to the active Canvas Layer"
+      },
+      "darknessLevel": {
+        "type": "property",
+        "detail": "number",
+        "info": "The currently displayed darkness level, which may override the saved Scene value."
+      },
       "initialize": {
         "type": "method",
         "detail": "() => void",
@@ -270,11 +393,6 @@
         "type": "method",
         "detail": "() => Promise<void>",
         "info": "When re-drawing the canvas, first tear down or discontinue some existing processes"
-      },
-      "getSceneManager": {
-        "type": "method",
-        "detail": "(scene) => foundry.canvas.SceneManager | null",
-        "info": "Create a SceneManager instance used for this Scene, if any."
       },
       "getGLParameter": {
         "type": "method",
@@ -405,16 +523,6 @@
         "detail": "(position) => boolean",
         "info": "Determine whether given canvas coordinates are off-screen."
       },
-      "clearContainer": {
-        "type": "method",
-        "detail": "(displayObject, destroy?) => void",
-        "info": "Remove all children of the display object and call one cleaning method:\nclean first, then tearDown, and destroy if no cleaning method is found."
-      },
-      "getRenderTexture": {
-        "type": "method",
-        "detail": "(options?) => PIXI.RenderTexture",
-        "info": "Get a texture with the required configuration and clear color."
-      },
       "pendingRenderFlags": {
         "type": "property",
         "detail": "Canvas.PendingRenderFlags",
@@ -427,13 +535,22 @@
       "triggerPendingOperations": {
         "type": "method",
         "detail": "() => void"
+      },
+      "pendingOperations": {
+        "type": "property",
+        "detail": "[]"
+      },
+      "colorManager": {
+        "type": "property",
+        "detail": "this[\"environment\"]"
       }
     }
   },
   "Token": {
     "type": "class",
     "detail": "Token",
-    "children": {
+    "instancePath": "token",
+    "staticChildren": {
       "embeddedName": {
         "type": "property",
         "detail": "\"Token\""
@@ -441,7 +558,9 @@
       "RENDER_FLAGS": {
         "type": "property",
         "detail": "Token.RENDER_FLAGS"
-      },
+      }
+    },
+    "instanceChildren": {
       "renderFlags": {
         "type": "property",
         "detail": "RenderFlags<Token.RENDER_FLAGS>"
@@ -520,10 +639,153 @@
         "detail": "sources.PointLightSource.Implementation | sources.PointDarknessSource.Implementation | undefined",
         "info": "A reference to the LightSource object which defines this light source area of effect"
       },
+      "animationContexts": {
+        "type": "property",
+        "detail": "Map<string, Token.AnimationContext>",
+        "info": "The current animations of this Token."
+      },
+      "ring": {
+        "type": "property",
+        "detail": "TokenRing.Implementation | null | undefined",
+        "info": "A TokenRing instance which is used if this Token applies a dynamic ring.\nThis property is null if the Token does not use a dynamic ring."
+      },
+      "hasDynamicRing": {
+        "type": "property",
+        "detail": "boolean",
+        "info": "A convenience boolean to test whether the Token is using a dynamic ring."
+      },
+      "actor": {
+        "type": "property",
+        "detail": "TokenDocument.Implementation[\"actor\"]",
+        "info": "A convenient reference to the Actor object associated with the Token embedded document."
+      },
+      "observer": {
+        "type": "property",
+        "detail": "boolean",
+        "info": "A boolean flag for whether the current game User has observer permission for the Token"
+      },
+      "name": {
+        "type": "property",
+        "detail": "string",
+        "info": "Convenience access to the token's nameplate string"
+      },
+      "bounds": {
+        "type": "property",
+        "detail": "PIXI.Rectangle"
+      },
+      "w": {
+        "type": "property",
+        "detail": "number",
+        "info": "Translate the token's grid width into a pixel width based on the canvas size"
+      },
+      "h": {
+        "type": "property",
+        "detail": "number",
+        "info": "Translate the token's grid height into a pixel height based on the canvas size"
+      },
+      "center": {
+        "type": "property",
+        "detail": "PIXI.Point",
+        "info": "The Token's current central position"
+      },
       "getMovementAdjustedPoint": {
         "type": "method",
         "detail": "(point, offsets?) => Canvas.Point",
         "info": "The Token's central position, adjusted in each direction by one or zero pixels to offset it relative to walls."
+      },
+      "sourceElement": {
+        "type": "property",
+        "detail": "PIXI.ImageSource | undefined",
+        "info": "The HTML source element for the primary Tile texture"
+      },
+      "sourceId": {
+        "type": "property",
+        "detail": "string"
+      },
+      "isVideo": {
+        "type": "property",
+        "detail": "boolean",
+        "info": "Does this Tile depict an animated video texture?"
+      },
+      "inCombat": {
+        "type": "property",
+        "detail": "boolean",
+        "info": "An indicator for whether or not this token is currently involved in the active combat encounter."
+      },
+      "combatant": {
+        "type": "property",
+        "detail": "Combatant.Stored",
+        "info": "Return a reference to a Combatant that represents this Token, if one is present in the current encounter."
+      },
+      "isTargeted": {
+        "type": "property",
+        "detail": "boolean",
+        "info": "An indicator for whether the Token is currently targeted by the active game User"
+      },
+      "detectionModes": {
+        "type": "property",
+        "detail": "TokenDocument.Implementation[\"detectionModes\"]",
+        "info": "Return a reference to the detection modes array."
+      },
+      "isVisible": {
+        "type": "property",
+        "detail": "boolean",
+        "info": "Determine whether the Token is visible to the calling user's perspective.\nHidden Tokens are only displayed to GM Users.\nNon-hidden Tokens are always visible if Token Vision is not required.\nControlled"
+      },
+      "animationName": {
+        "type": "property",
+        "detail": "string",
+        "info": "The animation name used for Token movement"
+      },
+      "hasSight": {
+        "type": "property",
+        "detail": "boolean",
+        "info": "Test whether the Token has sight (or blindness) at any radius"
+      },
+      "emitsDarkness": {
+        "type": "property",
+        "detail": "boolean",
+        "info": "Does this Ambient Light actively emit darkness given\nits properties and the current darkness level of the Scene?"
+      },
+      "emitsLight": {
+        "type": "property",
+        "detail": "boolean",
+        "info": "Does this Ambient Light actively emit light given\nits properties and the current darkness level of the Scene?"
+      },
+      "hasLimitedSourceAngle": {
+        "type": "property",
+        "detail": "boolean",
+        "info": "Test whether the Token uses a limited angle of vision or light emission."
+      },
+      "dimRadius": {
+        "type": "property",
+        "detail": "number",
+        "info": "Translate the token's dim light distance in units into a radius in pixels."
+      },
+      "brightRadius": {
+        "type": "property",
+        "detail": "number",
+        "info": "Translate the token's bright light distance in units into a radius in pixels."
+      },
+      "radius": {
+        "type": "property",
+        "detail": "number",
+        "info": "The maximum radius in pixels of the light field"
+      },
+      "lightPerceptionRange": {
+        "type": "property",
+        "detail": "number",
+        "info": "The range of this token's light perception in pixels."
+      },
+      "sightRange": {
+        "type": "property",
+        "detail": "number",
+        "info": "Translate the token's vision range in units into a radius in pixels."
+      },
+      "optimalSightRange": {
+        "type": "property",
+        "detail": "number",
+        "info": "Translate the token's maximum vision range that takes into account lights."
       },
       "initializeSources": {
         "type": "method",
@@ -628,6 +890,11 @@
         "detail": "(targeted?, context?) => void",
         "info": "Set this Token as an active target for the current game User"
       },
+      "externalRadius": {
+        "type": "property",
+        "detail": "number",
+        "info": "The external radius of the token in pixels."
+      },
       "getLightRadius": {
         "type": "method",
         "detail": "(units) => number",
@@ -651,6 +918,11 @@
         "detail": "(x, y) => Canvas.Point",
         "info": "Get the center-point coordinate for a given grid position"
       },
+      "owner": {
+        "type": "property",
+        "detail": "boolean",
+        "info": "A convenient reference for whether the current User has full control over the Token document."
+      },
       "toggleCombat": {
         "type": "method",
         "detail": "(combat?) => Promise<Combatant.Stored[]>"
@@ -668,51 +940,371 @@
   "Actors": {
     "type": "class",
     "detail": "Actors",
-    "children": {
+    "staticChildren": {
       "documentName": {
         "type": "property",
         "detail": "\"Actor\""
       },
+      "instance": {
+        "type": "property",
+        "detail": "Actors.Implementation"
+      }
+    },
+    "instanceChildren": {
+      "tokens": {
+        "type": "property",
+        "detail": "Record<string, Actor.Stored>",
+        "info": "A mapping of synthetic Token Actors which are currently active within the viewed Scene.\nEach Actor is referenced by the Token.id."
+      },
       "fromCompendium": {
         "type": "method",
-        "detail": "(document, options?) => abstract.WorldCollection.FromCompendiumReturnType<\"Actor\", Options>"
+        "detail": "(document, options?) => WorldCollection.FromCompendiumReturnType<\"Actor\", Options>"
+      }
+    }
+  },
+  "ClientSettings": {
+    "type": "class",
+    "detail": "ClientSettings",
+    "constructorDetail": "(worldSettings?) => ClientSettings",
+    "instanceChildren": {
+      "settings": {
+        "type": "property",
+        "detail": "ClientSettings.SettingsMap",
+        "info": "A object of registered game settings for this scope"
+      },
+      "menus": {
+        "type": "property",
+        "detail": "Map<string, ClientSettings.SettingSubmenuConfig>",
+        "info": "Registered settings menus which trigger secondary applications"
+      },
+      "storage": {
+        "type": "property",
+        "detail": "Map<string, Storage | collections.WorldSettings.Implementation>",
+        "info": "The storage interfaces used for persisting settings\nEach storage interface shares the same API as window.localStorage"
+      },
+      "sheet": {
+        "type": "property",
+        "detail": "foundry.applications.settings.SettingsConfig",
+        "info": "Return a singleton instance of the Game Settings Configuration app"
+      },
+      "register": {
+        "type": "method",
+        "detail": "(namespace, key, data) => void",
+        "info": "Register a new namespaced game setting. The setting's scope determines where the setting is saved.\nWorld - World settings are applied to everyone in the World. Use this for settings like system rule v"
+      },
+      "registerMenu": {
+        "type": "method",
+        "detail": "(namespace, key, data) => void",
+        "info": "Register a new sub-settings menu"
+      },
+      "get": {
+        "type": "method",
+        "detail": "(namespace, key, options?) => ClientSettings.Get<N, K, Doc>",
+        "info": "Get the value of a game setting for a certain namespace and setting key"
+      },
+      "set": {
+        "type": "method",
+        "detail": "(namespace, key, value, options?) => Promise<ClientSettings.Get<N, K, Doc>>",
+        "info": "Set the value of a game setting for a certain namespace and setting key"
+      }
+    }
+  },
+  "Localization": {
+    "type": "class",
+    "detail": "Localization",
+    "constructorDetail": "(serverLanguage?) => Localization",
+    "staticChildren": {
+      "localizeDataModel": {
+        "type": "method",
+        "detail": "(model, options?) => void",
+        "info": "Perform one-time localization of the fields in a DataModel schema, translating their label and hint properties."
+      },
+      "localizeSchema": {
+        "type": "method",
+        "detail": "(schema, prefixes?, options?) => void",
+        "info": "Localize the \"label\" and \"hint\" properties for all fields in a data schema."
+      }
+    },
+    "instanceChildren": {
+      "lang": {
+        "type": "property",
+        "detail": "string",
+        "info": "The target language for localization"
+      },
+      "defaultModule": {
+        "type": "property",
+        "detail": "string",
+        "info": "The package authorized to provide default language configurations"
+      },
+      "translations": {
+        "type": "property",
+        "detail": "Localization.Translations",
+        "info": "The translation dictionary for the target language"
+      },
+      "initialize": {
+        "type": "method",
+        "detail": "() => Promise<void>",
+        "info": "Initialize the Localization module\nDiscover available language translations and apply the current language setting"
+      },
+      "setLanguage": {
+        "type": "method",
+        "detail": "(lang) => Promise<void>",
+        "info": "Set a language as the active translation source for the session"
+      },
+      "has": {
+        "type": "method",
+        "detail": "(stringId, fallback?) => boolean",
+        "info": "Return whether a certain string has a known translation defined."
+      },
+      "localize": {
+        "type": "method",
+        "detail": "(stringId) => string",
+        "info": "Localize a string by drawing a translation from the available translations dictionary, if available\nIf a translation is not available, the original string is returned"
+      },
+      "format": {
+        "type": "method",
+        "detail": "(stringId, data?) => string",
+        "info": "Localize a string including variable formatting for input arguments.\nProvide a string ID which defines the localized template.\nVariables can be included in the template enclosed in braces and will be "
+      },
+      "getListFormatter": {
+        "type": "method",
+        "detail": "(options?) => Intl.ListFormat",
+        "info": "Retrieve list formatter configured to the world's language setting."
+      },
+      "sortObjects": {
+        "type": "method",
+        "detail": "(objects, key) => T[]",
+        "info": "Sort an array of objects by a given key in a localization-aware manner."
       }
     }
   },
   "Items": {
     "type": "class",
     "detail": "Items",
-    "children": {
+    "staticChildren": {
       "documentName": {
         "type": "property",
         "detail": "\"Item\""
+      },
+      "instance": {
+        "type": "property",
+        "detail": "Items.Implementation"
       }
     }
   },
   "Users": {
     "type": "class",
     "detail": "Users",
-    "children": {
+    "constructorDetail": "(data?) => Users",
+    "staticChildren": {
+      "documentName": {
+        "type": "property",
+        "detail": "\"User\""
+      },
+      "instance": {
+        "type": "property",
+        "detail": "Users.Implementation"
+      }
+    },
+    "instanceChildren": {
       "current": {
         "type": "property",
         "detail": "User.Stored | null",
         "info": "The User document of the currently connected user"
       },
-      "documentName": {
+      "players": {
         "type": "property",
-        "detail": "\"User\""
+        "detail": "User.Stored[]",
+        "info": "Get the users with player roles"
+      },
+      "activeGM": {
+        "type": "property",
+        "detail": "User.Stored | null",
+        "info": "Get one User who is an active Gamemaster (non-assistant if possible), or null if no active GM is available.\nThis can be useful for workflows which occur on all clients, but where only one user should "
       },
       "getDesignatedUser": {
         "type": "method",
-        "detail": "(condition) => User.Implementation | null",
+        "detail": "(condition) => User.Stored | null",
         "info": "Get the designated User among the Users that satisfy the given condition.\nReturns `null` if no Users satisfy the given condition.\nReturns a User with the highest role among the qualifying Users.\nQuali"
+      }
+    }
+  },
+  "Notifications": {
+    "type": "class",
+    "detail": "Notifications",
+    "constructorDetail": "() => Notifications",
+    "staticChildren": {
+      "MAX_ACTIVE": {
+        "type": "property",
+        "detail": "number",
+        "info": "The maximum number of active notifications."
+      },
+      "LIFETIME_MS": {
+        "type": "property",
+        "detail": "number",
+        "info": "The maximum number of active notifications."
+      }
+    },
+    "instanceChildren": {
+      "notify": {
+        "type": "method",
+        "detail": "(message, type?, options?) => Notifications.Notification<Coalesce<T, \"info\">>",
+        "info": "Push a new notification into the queue"
+      },
+      "info": {
+        "type": "method",
+        "detail": "(message, options?) => Notifications.Notification<\"info\">",
+        "info": "Display a notification with the \"info\" type"
+      },
+      "warn": {
+        "type": "method",
+        "detail": "(message, options?) => Notifications.Notification<\"warning\">",
+        "info": "Display a notification with the \"warning\" type"
+      },
+      "error": {
+        "type": "method",
+        "detail": "(message, options?) => Notifications.Notification<\"error\">",
+        "info": "Display a notification with the \"error\" type"
+      },
+      "success": {
+        "type": "method",
+        "detail": "(message, options?) => Notifications.Notification<\"success\">",
+        "info": "Display a notification with the \"success\" type."
+      },
+      "update": {
+        "type": "method",
+        "detail": "(notification, update) => void",
+        "info": "Update the progress of the notification."
+      },
+      "remove": {
+        "type": "method",
+        "detail": "(id) => void",
+        "info": "Remove the notification linked to the ID."
+      },
+      "has": {
+        "type": "method",
+        "detail": "(id) => boolean",
+        "info": "Does the notification linked to the ID exist?."
+      },
+      "clear": {
+        "type": "method",
+        "detail": "() => void",
+        "info": "Clear all notifications."
+      }
+    }
+  },
+  "ActiveEffect": {
+    "type": "class",
+    "detail": "ActiveEffect",
+    "constructorDetail": "(data, context?) => ActiveEffect",
+    "staticChildren": {
+      "fromStatusEffect": {
+        "type": "method",
+        "detail": "(statusId, options?) => Promise<ActiveEffect.Implementation>",
+        "info": "Create an ActiveEffect instance from some status effect ID.\nDelegates to  to create the ActiveEffect instance\nafter creating the ActiveEffect data from the status effect data if `CONFIG.statusEffects`"
+      },
+      "applyField": {
+        "type": "method",
+        "detail": "(model, change, field?) => ActiveEffect.ApplyFieldReturn<Field>",
+        "info": "Apply ActiveEffect.EffectChangeData to a field within a DataModel."
+      },
+      "getInitialDuration": {
+        "type": "method",
+        "detail": "() => ActiveEffect.GetInitialDurationReturn",
+        "info": "Retrieve the initial duration configuration."
+      },
+      "defaultName": {
+        "type": "method",
+        "detail": "(context) => string"
+      },
+      "createDialog": {
+        "type": "method",
+        "detail": "(data, createOptions, options?) => Promise<ActiveEffect.Stored | null | undefined>"
+      },
+      "fromDropData": {
+        "type": "method",
+        "detail": "(data, options?) => Promise<ActiveEffect.Implementation | undefined>"
+      },
+      "fromImport": {
+        "type": "method",
+        "detail": "(source, context?) => Promise<ActiveEffect.Implementation>"
+      }
+    },
+    "instanceChildren": {
+      "isSuppressed": {
+        "type": "property",
+        "detail": "boolean",
+        "info": "Is there some system logic that makes this active effect ineligible for application?"
+      },
+      "target": {
+        "type": "property",
+        "detail": "Document.Any | null",
+        "info": "Retrieve the Document that this ActiveEffect targets for modification."
+      },
+      "active": {
+        "type": "property",
+        "detail": "boolean",
+        "info": "Whether the Active Effect currently applying its changes to the target."
+      },
+      "modifiesActor": {
+        "type": "property",
+        "detail": "boolean",
+        "info": "Does this Active Effect currently modify an Actor?"
+      },
+      "prepareDerivedData": {
+        "type": "method",
+        "detail": "() => void"
+      },
+      "updateDuration": {
+        "type": "method",
+        "detail": "() => ActiveEffect.Duration",
+        "info": "Update derived Active Effect duration data.\nConfigure the remaining and label properties to be getters which lazily recompute only when necessary."
+      },
+      "isTemporary": {
+        "type": "property",
+        "detail": "boolean",
+        "info": "Describe whether the ActiveEffect has a temporary duration based on combat turns or rounds."
+      },
+      "sourceName": {
+        "type": "property",
+        "detail": "string",
+        "info": "The source name of the Active Effect. The source is retrieved synchronously.\nTherefore \"Unknown\" (localized) is returned if the origin points to a document inside a compendium.\nReturns \"None\" (localiz"
+      },
+      "apply": {
+        "type": "method",
+        "detail": "(actor, change) => AnyMutableObject",
+        "info": "Apply this ActiveEffect to a provided Actor."
+      },
+      "deleteDialog": {
+        "type": "method",
+        "detail": "(options?, operation?) => Promise<this | false | null | undefined>"
       }
     }
   },
   "Actor": {
     "type": "class",
     "detail": "Actor",
-    "children": {
+    "constructorDetail": "(data, context?) => Actor",
+    "instancePath": "actor",
+    "staticChildren": {
+      "defaultName": {
+        "type": "method",
+        "detail": "(context?) => string"
+      },
+      "createDialog": {
+        "type": "method",
+        "detail": "(data?, createOptions?, options?) => Promise<Actor.Stored | null | undefined>"
+      },
+      "fromDropData": {
+        "type": "method",
+        "detail": "(data, options?) => Promise<Actor.Implementation | undefined>"
+      },
+      "fromImport": {
+        "type": "method",
+        "detail": "(source, context?) => Promise<Actor.Implementation>"
+      }
+    },
+    "instanceChildren": {
       "overrides": {
         "type": "property",
         "detail": "Record<string, unknown>",
@@ -722,6 +1314,41 @@
         "type": "property",
         "detail": "Set<string>",
         "info": "The statuses that are applied to this actor by active effects"
+      },
+      "thumbnail": {
+        "type": "property",
+        "detail": "string | null",
+        "info": "Provide a thumbnail image path used to represent this document."
+      },
+      "itemTypes": {
+        "type": "property",
+        "detail": "Actor.ItemTypes",
+        "info": "A convenience getter to an object that organizes all embedded Item instances by subtype. The object is cached and\nlazily re-computed as needed."
+      },
+      "isToken": {
+        "type": "property",
+        "detail": "boolean",
+        "info": "Test whether an Actor document is a synthetic representation of a Token (if true) or a full Document (if false)"
+      },
+      "appliedEffects": {
+        "type": "property",
+        "detail": "ActiveEffect.Implementation[]",
+        "info": "Retrieve the list of ActiveEffects that are currently applied to this Actor."
+      },
+      "temporaryEffects": {
+        "type": "property",
+        "detail": "ActiveEffect.Implementation[]",
+        "info": "An array of ActiveEffect instances which are present on the Actor which have a limited duration."
+      },
+      "token": {
+        "type": "property",
+        "detail": "TokenDocument.Implementation | null",
+        "info": "Return a reference to the TokenDocument which owns this Actor as a synthetic override"
+      },
+      "inCombat": {
+        "type": "property",
+        "detail": "boolean",
+        "info": "Whether the Actor has at least one Combatant in the active Combat that represents it."
       },
       "clone": {
         "type": "method",
@@ -772,7 +1399,7 @@
       },
       "rollInitiative": {
         "type": "method",
-        "detail": "(options?) => Promise<void>",
+        "detail": "(options?) => Promise<Combat.Implementation | null>",
         "info": "Roll initiative for all Combatants in the currently active Combat encounter which are associated with this Actor.\nIf viewing a full Actor document, all Tokens which map to that actor will be targeted "
       },
       "toggleStatusEffect": {
@@ -785,45 +1412,342 @@
         "detail": "(options?) => TokenDocument.Implementation[]",
         "info": "Get this actor's dependent tokens.\nIf the actor is a synthetic token actor, only the exact Token which it represents will be returned."
       },
+      "deleteDialog": {
+        "type": "method",
+        "detail": "(options?, operation?) => Promise<this | false | null | undefined>"
+      }
+    }
+  },
+  "Folder": {
+    "type": "class",
+    "detail": "Folder",
+    "constructorDetail": "(data, context?) => Folder",
+    "staticChildren": {
+      "createDialog": {
+        "type": "method",
+        "detail": "(data?, createOptions?, options?) => Promise<Folder.Stored | null | undefined>"
+      },
       "defaultName": {
         "type": "method",
         "detail": "(context?) => string"
       },
-      "createDialog": {
+      "fromDropData": {
         "type": "method",
-        "detail": "(data?, createOptions?, options?) => Promise<Actor.Stored | null | undefined>"
+        "detail": "(data, options?) => Promise<Folder.Implementation | undefined>"
+      },
+      "fromImport": {
+        "type": "method",
+        "detail": "(source, context?) => Promise<Folder.Implementation>"
+      }
+    },
+    "instanceChildren": {
+      "depth": {
+        "type": "property",
+        "detail": "number | undefined",
+        "info": "The depth of this folder in its sidebar tree"
+      },
+      "children": {
+        "type": "property",
+        "detail": "Folder.ChildNode | undefined",
+        "info": "An array of nodes representing the children of this one. This differs from the results of\n| `Folder#getSubfolders`, which reports the subset of child Folders\ndisplayed to the current User in the UI.\n\n"
+      },
+      "displayed": {
+        "type": "property",
+        "detail": "boolean",
+        "info": "Return whether the folder is displayed in the sidebar to the current User."
+      },
+      "contents": {
+        "type": "property",
+        "detail": "Folder.Contents<SubType>",
+        "info": "The array of the Document instances which are contained within this Folder,\nunless it's a Folder inside a Compendium pack, in which case it's the array\nof objects inside the index of the pack that are"
+      },
+      "documentClass": {
+        "type": "property",
+        "detail": "Folder.DocumentClass<SubType>",
+        "info": "The reference to the Document type which is contained within this Folder."
+      },
+      "documentCollection": {
+        "type": "property",
+        "detail": "Folder.DocumentCollection<SubType>",
+        "info": "The reference to the WorldCollection instance which provides Documents to this Folder,\nunless it's a Folder inside a Compendium pack, in which case it's the index of the pack.\nA world Folder containin"
+      },
+      "expanded": {
+        "type": "property",
+        "detail": "boolean",
+        "info": "Return whether the folder is currently expanded within the sidebar interface."
+      },
+      "ancestors": {
+        "type": "property",
+        "detail": "Folder.Stored[]",
+        "info": "Return the list of ancestors of this folder, starting with the parent."
+      },
+      "inCompendium": {
+        "type": "property",
+        "detail": "boolean"
       },
       "deleteDialog": {
         "type": "method",
         "detail": "(options?, operation?) => Promise<this | false | null | undefined>"
       },
-      "fromDropData": {
+      "exportToCompendium": {
         "type": "method",
-        "detail": "(data, options?) => Promise<Actor.Implementation | undefined>"
+        "detail": "(pack, options?) => Promise<Pack>",
+        "info": "Export all Documents contained in this Folder to a given Compendium pack.\nOptionally update existing Documents within the Pack by name, otherwise append all new entries."
       },
-      "fromImport": {
+      "exportDialog": {
         "type": "method",
-        "detail": "(source, context?) => Promise<Actor.Implementation>"
+        "detail": "(pack, options?) => Promise<void>",
+        "info": "Provide a dialog form that allows for exporting the contents of a Folder into an eligible Compendium pack."
+      },
+      "getSubfolders": {
+        "type": "method",
+        "detail": "(recursive?) => Folder.Stored<SubType>[]",
+        "info": "Get the Folder documents which are sub-folders of the current folder, either direct children or recursively."
+      },
+      "getParentFolders": {
+        "type": "method",
+        "detail": "() => Folder.Stored<SubType>[]",
+        "info": "Get the Folder documents which are parent folders of the current folder or any if its parents."
       }
     }
+  },
+  "Roll": {
+    "type": "class",
+    "detail": "Roll",
+    "constructorDetail": "(formula, data?, options?) => Roll",
+    "staticChildren": {
+      "MATH_PROXY": {
+        "type": "property",
+        "detail": "Math",
+        "info": "A Proxy environment for safely evaluating a string using only available Math functions"
+      },
+      "CHAT_TEMPLATE": {
+        "type": "property",
+        "detail": "string",
+        "info": "The HTML template path used to render a complete Roll object to the chat log"
+      },
+      "TOOLTIP_TEMPLATE": {
+        "type": "property",
+        "detail": "string",
+        "info": "The HTML template used to render an expanded Roll tooltip to the chat log"
+      },
+      "RESOLVERS": {
+        "type": "property",
+        "detail": "Map<Roll, RollResolver>",
+        "info": "A mapping of Roll instances to currently-active resolvers."
+      },
+      "create": {
+        "type": "method",
+        "detail": "(formula, data?, options?) => typeof CONFIG.Dice.rolls extends [infer T] ? T : Roll<D>",
+        "info": "A factory method which constructs a Roll instance using the default configured Roll class."
+      },
+      "defaultImplementation": {
+        "type": "property",
+        "detail": "typeof Roll",
+        "info": "Get the default configured Roll class."
+      },
+      "resolverImplementation": {
+        "type": "property",
+        "detail": "typeof RollResolver",
+        "info": "Retrieve the appropriate resolver implementation based on the user's configuration."
+      },
+      "getFormula": {
+        "type": "method",
+        "detail": "(terms) => string",
+        "info": "Transform an array of RollTerm objects into a cleaned string formula representation."
+      },
+      "safeEval": {
+        "type": "method",
+        "detail": "(expression) => number",
+        "info": "A sandbox-safe evaluation function to execute user-input code with access to scoped Math methods."
+      },
+      "simplifyTerms": {
+        "type": "method",
+        "detail": "(terms) => RollTerm[]",
+        "info": "After parenthetical and arithmetic terms have been resolved, we need to simplify the remaining expression.\nAny remaining string terms need to be combined with adjacent non-operators in order to constr"
+      },
+      "simulate": {
+        "type": "method",
+        "detail": "(formula, n?) => Promise<number[]>",
+        "info": "Simulate a roll and evaluate the distribution of returned results"
+      },
+      "registerResult": {
+        "type": "method",
+        "detail": "(method, denomination, result) => boolean | void",
+        "info": "Register an externally-fulfilled result with an active RollResolver."
+      },
+      "parse": {
+        "type": "method",
+        "detail": "(formula, data) => RollTerm[]",
+        "info": "Parse a formula expression using the compiled peggy grammar."
+      },
+      "instantiateAST": {
+        "type": "method",
+        "detail": "(ast) => RollTerm[]",
+        "info": "Instantiate the nodes in an AST sub-tree into RollTerm instances."
+      },
+      "replaceFormulaData": {
+        "type": "method",
+        "detail": "(formula, data, options?) => string",
+        "info": "Replace referenced data attributes in the roll formula with values from the provided data.\nData references in the formula use the \\@attr syntax and would reference the corresponding attr key."
+      },
+      "validate": {
+        "type": "method",
+        "detail": "(formula) => boolean",
+        "info": "Validate that a provided roll formula can represent a valid"
+      },
+      "identifyFulfillableTerms": {
+        "type": "method",
+        "detail": "(terms) => DiceTerm[]",
+        "info": "Determine which of the given terms require external fulfillment."
+      },
+      "expandInlineResult": {
+        "type": "method",
+        "detail": "(a) => Promise<void>",
+        "info": "Expand an inline roll element to display its contained dice result as a tooltip."
+      },
+      "collapseInlineResult": {
+        "type": "method",
+        "detail": "(a) => void",
+        "info": "Collapse an expanded inline roll to conceal its tooltip."
+      },
+      "fromData": {
+        "type": "method",
+        "detail": "(this, data) => FixedInstanceType<T>",
+        "info": "Recreate a Roll instance using a provided data object"
+      },
+      "fromJSON": {
+        "type": "method",
+        "detail": "(this, json) => FixedInstanceType<T>",
+        "info": "Recreate a Roll instance using a provided JSON string"
+      },
+      "fromTerms": {
+        "type": "method",
+        "detail": "(this, terms, options?) => FixedInstanceType<T>",
+        "info": "Manually construct a Roll object by providing an explicit set of input terms"
+      }
+    },
+    "instanceChildren": {
+      "data": {
+        "type": "property",
+        "detail": "D",
+        "info": "The original provided data object which substitutes into attributes of the roll formula"
+      },
+      "options": {
+        "type": "property",
+        "detail": "Roll.Options",
+        "info": "Options which modify or describe the Roll"
+      },
+      "terms": {
+        "type": "property",
+        "detail": "RollTerm[]",
+        "info": "The identified terms of the Roll"
+      },
+      "dice": {
+        "type": "property",
+        "detail": "DiceTerm[]",
+        "info": "Return an Array of the individual DiceTerm instances contained within this Roll."
+      },
+      "formula": {
+        "type": "property",
+        "detail": "string",
+        "info": "Return a standardized representation for the displayed formula associated with this Roll."
+      },
+      "result": {
+        "type": "property",
+        "detail": "string",
+        "info": "The resulting arithmetic expression after rolls have been evaluated"
+      },
+      "total": {
+        "type": "property",
+        "detail": "number | undefined",
+        "info": "Return the total result of the Roll expression if it has been evaluated."
+      },
+      "product": {
+        "type": "property",
+        "detail": "number | undefined",
+        "info": "Return the arbitrary product of evaluating this Roll."
+      },
+      "isDeterministic": {
+        "type": "property",
+        "detail": "boolean",
+        "info": "Whether this Roll contains entirely deterministic terms or whether there is some randomness."
+      },
+      "alter": {
+        "type": "method",
+        "detail": "(multiply, add, { multiplyNumeric }?) => this",
+        "info": "Alter the Roll expression by adding or multiplying the number of dice which are rolled"
+      },
+      "clone": {
+        "type": "method",
+        "detail": "() => this",
+        "info": "Clone the Roll instance, returning a new Roll instance that has not yet been evaluated."
+      },
+      "evaluate": {
+        "type": "method",
+        "detail": "({\n    minimize,\n    maximize,\n    allowStrings,\n    allowInteractive,\n    ...options\n  }?) => Promise<Roll.Evaluated<this>>",
+        "info": "Execute the Roll, replacing dice and evaluating the total result"
+      },
+      "evaluateSync": {
+        "type": "method",
+        "detail": "({ minimize, maximize, allowStrings, strict }?) => Roll.Evaluated<this>",
+        "info": "Execute the Roll synchronously, replacing dice and evaluating the total result."
+      },
+      "roll": {
+        "type": "method",
+        "detail": "(options?) => Promise<Roll.Evaluated<this>>",
+        "info": "Alias for evaluate."
+      },
+      "reroll": {
+        "type": "method",
+        "detail": "(options?) => Promise<Roll.Evaluated<this>>",
+        "info": "Create a new Roll object using the original provided formula and data.\nEach roll is immutable, so this method returns a new Roll instance using the same data."
+      },
+      "resetFormula": {
+        "type": "method",
+        "detail": "() => string",
+        "info": "Recompile the formula string that represents this Roll instance from its component terms."
+      },
+      "propagateFlavor": {
+        "type": "method",
+        "detail": "(flavor) => void",
+        "info": "Propagate flavor text across all terms that do not have any."
+      },
+      "getTooltip": {
+        "type": "method",
+        "detail": "() => Promise<string>",
+        "info": "Render the tooltip HTML for a Roll instance"
+      },
+      "render": {
+        "type": "method",
+        "detail": "(options?) => Promise<string>",
+        "info": "Render a Roll instance to HTML"
+      },
+      "toMessage": {
+        "type": "method",
+        "detail": "(messageData?, options?) => Promise<Roll.ToMessageReturn<Create>>",
+        "info": "Transform a Roll instance into a ChatMessage, displaying the roll result.\nThis function can either create the ChatMessage directly, or return the data object that will be used to create."
+      },
+      "toAnchor": {
+        "type": "method",
+        "detail": "(options?) => HTMLAnchorElement",
+        "info": "Construct an inline roll link for this Roll."
+      }
+    }
+  },
+  "Game": {
+    "type": "class",
+    "detail": "Game"
   },
   "ChatMessage": {
     "type": "class",
     "detail": "ChatMessage",
-    "children": {
-      "logged": {
-        "type": "property",
-        "detail": "boolean",
-        "info": "Is this ChatMessage currently displayed in the sidebar ChatLog?"
-      },
-      "prepareDerivedData": {
-        "type": "method",
-        "detail": "() => void"
-      },
+    "constructorDetail": "(data?, context?) => ChatMessage",
+    "staticChildren": {
       "applyRollMode": {
         "type": "method",
-        "detail": "(rollMode) => void",
-        "info": "Update the data of a ChatMessage instance to apply a requested roll mode.\nThis function calls  and updates the source of the ChatMessage."
+        "detail": "(chatData, rollMode) => ChatMessage.CreateData",
+        "info": "Transform a provided object of ChatMessage data by applying a certain roll mode to the data object.\n - Public: `whisper` is set to `[]` and `blind` is set to `false`.\n - Self: `whisper` is set to `[ga"
       },
       "getSpeaker": {
         "type": "method",
@@ -835,15 +1759,77 @@
         "detail": "(speaker?) => Actor.Implementation | null",
         "info": "Obtain an Actor instance which represents the speaker of this message (if any)"
       },
-      "getRollData": {
-        "type": "method",
-        "detail": "() => AnyObject",
-        "info": "Obtain a data object used to evaluate any dice rolls associated with this particular chat message"
-      },
       "getWhisperRecipients": {
         "type": "method",
         "detail": "(name) => User.Stored[]",
         "info": "Given a string whisper target, return an Array of the user IDs which should be targeted for the whisper"
+      },
+      "defaultName": {
+        "type": "method",
+        "detail": "(context?) => string"
+      },
+      "createDialog": {
+        "type": "method",
+        "detail": "(data?, createOptions?, options?) => Promise<ChatMessage.Stored | null | undefined>"
+      },
+      "fromDropData": {
+        "type": "method",
+        "detail": "(data, options?) => Promise<ChatMessage.Implementation | undefined>"
+      },
+      "fromImport": {
+        "type": "method",
+        "detail": "(source, context?) => Promise<ChatMessage.Implementation>"
+      }
+    },
+    "instanceChildren": {
+      "logged": {
+        "type": "property",
+        "detail": "boolean",
+        "info": "Is this ChatMessage currently displayed in the sidebar ChatLog?"
+      },
+      "alias": {
+        "type": "property",
+        "detail": "string",
+        "info": "Return the recommended String alias for this message.\nThe alias could be a Token name in the case of in-character messages or dice rolls.\nAlternatively it could be a User name in the case of OOC chat "
+      },
+      "isAuthor": {
+        "type": "property",
+        "detail": "boolean",
+        "info": "Is the current User the author of this message?"
+      },
+      "isContentVisible": {
+        "type": "property",
+        "detail": "boolean",
+        "info": "Return whether the content of the message is visible to the current user.\nFor certain dice rolls, for example, the message itself may be visible while the content of that message is not."
+      },
+      "isRoll": {
+        "type": "property",
+        "detail": "boolean",
+        "info": "Test whether the chat message contains a dice roll"
+      },
+      "visible": {
+        "type": "property",
+        "detail": "boolean",
+        "info": "Return whether the ChatMessage is visible to the current User.\nMessages may not be visible if they are private whispers."
+      },
+      "speakerActor": {
+        "type": "property",
+        "detail": "Actor.Implementation | null",
+        "info": "The Actor which represents the speaker of this message (if any)."
+      },
+      "prepareDerivedData": {
+        "type": "method",
+        "detail": "() => void"
+      },
+      "applyRollMode": {
+        "type": "method",
+        "detail": "(rollMode) => void",
+        "info": "Update the data of a ChatMessage instance to apply a requested roll mode.\nThis function calls  and updates the source of the ChatMessage."
+      },
+      "getRollData": {
+        "type": "method",
+        "detail": "() => AnyObject",
+        "info": "Obtain a data object used to evaluate any dice rolls associated with this particular chat message"
       },
       "renderHTML": {
         "type": "method",
@@ -859,32 +1845,40 @@
         "type": "method",
         "detail": "() => Promise<JQuery>"
       },
-      "defaultName": {
-        "type": "method",
-        "detail": "(context?) => string"
-      },
-      "createDialog": {
-        "type": "method",
-        "detail": "(data?, createOptions?, options?) => Promise<ChatMessage.Stored | null | undefined>"
-      },
       "deleteDialog": {
         "type": "method",
         "detail": "(options?, operation?) => Promise<this | false | null | undefined>"
-      },
-      "fromDropData": {
-        "type": "method",
-        "detail": "(data, options?) => Promise<ChatMessage.Implementation | undefined>"
-      },
-      "fromImport": {
-        "type": "method",
-        "detail": "(source, context?) => Promise<ChatMessage.Implementation>"
       }
     }
   },
   "Combat": {
     "type": "class",
     "detail": "Combat",
-    "children": {
+    "constructorDetail": "(data?, context?) => Combat",
+    "staticChildren": {
+      "CONFIG_SETTING": {
+        "type": "property",
+        "detail": "\"combatTrackerConfig\"",
+        "info": "The configuration setting used to record Combat preferences"
+      },
+      "defaultName": {
+        "type": "method",
+        "detail": "(context?) => string"
+      },
+      "createDialog": {
+        "type": "method",
+        "detail": "(data?, createOptions?, options?) => Promise<Combat.Stored | null | undefined>"
+      },
+      "fromDropData": {
+        "type": "method",
+        "detail": "(data, options?) => Promise<Combat.Implementation | undefined>"
+      },
+      "fromImport": {
+        "type": "method",
+        "detail": "(source, context?) => Promise<Combat.Implementation>"
+      }
+    },
+    "instanceChildren": {
       "turns": {
         "type": "property",
         "detail": "Combatant.Implementation[]",
@@ -900,10 +1894,39 @@
         "detail": "Combat.HistoryData | undefined",
         "info": "Track the previous round, turn, and tokenId to understand changes in the encounter state"
       },
-      "CONFIG_SETTING": {
+      "combatant": {
         "type": "property",
-        "detail": "\"combatTrackerConfig\"",
-        "info": "The configuration setting used to record Combat preferences"
+        "detail": "Combatant.Implementation | undefined | null",
+        "info": "Get the Combatant who has the current turn."
+      },
+      "nextCombatant": {
+        "type": "property",
+        "detail": "Combatant.Implementation | undefined",
+        "info": "Get the Combatant who has the next turn."
+      },
+      "settings": {
+        "type": "property",
+        "detail": "foundry.helpers.ClientSettings.SettingInitializedType<\"core\", Combat.CONFIG_SETTING>",
+        "info": "Return the object of settings which modify the Combat Tracker behavior"
+      },
+      "started": {
+        "type": "property",
+        "detail": "boolean",
+        "info": "Has this combat encounter been started?"
+      },
+      "visible": {
+        "type": "property",
+        "detail": "boolean"
+      },
+      "isActive": {
+        "type": "property",
+        "detail": "boolean",
+        "info": "Is this combat active in the current scene?"
+      },
+      "isView": {
+        "type": "property",
+        "detail": "boolean",
+        "info": "Is this Combat currently being viewed?"
       },
       "activate": {
         "type": "method",
@@ -1017,93 +2040,35 @@
         "type": "method",
         "detail": "(token) => Combatant.Implementation | null"
       },
-      "defaultName": {
-        "type": "method",
-        "detail": "(context?) => string"
-      },
-      "createDialog": {
-        "type": "method",
-        "detail": "(data?, createOptions?, options?) => Promise<Combat.Stored | null | undefined>"
-      },
       "deleteDialog": {
         "type": "method",
         "detail": "(options?, operation?) => Promise<this | false | null | undefined>"
-      },
-      "fromDropData": {
-        "type": "method",
-        "detail": "(data, options?) => Promise<Combat.Implementation | undefined>"
-      },
-      "fromImport": {
-        "type": "method",
-        "detail": "(source, context?) => Promise<Combat.Implementation>"
-      }
-    }
-  },
-  "Folder": {
-    "type": "class",
-    "detail": "Folder",
-    "children": {
-      "depth": {
-        "type": "property",
-        "detail": "number | undefined",
-        "info": "The depth of this folder in its sidebar tree"
-      },
-      "children": {
-        "type": "property",
-        "detail": "Folder.ChildNode | undefined",
-        "info": "An array of nodes representing the children of this one. This differs from the results of\n| `Folder#getSubfolders`, which reports the subset of child Folders\ndisplayed to the current User in the UI.\n\n"
-      },
-      "displayed": {
-        "type": "property",
-        "detail": "boolean",
-        "info": "Return whether the folder is displayed in the sidebar to the current User."
-      },
-      "createDialog": {
-        "type": "method",
-        "detail": "(data?, createOptions?, options?) => Promise<Folder.Stored | null | undefined>"
-      },
-      "deleteDialog": {
-        "type": "method",
-        "detail": "(options?, operation?) => Promise<this | false | null | undefined>"
-      },
-      "exportToCompendium": {
-        "type": "method",
-        "detail": "(pack, options?) => Promise<Pack>",
-        "info": "Export all Documents contained in this Folder to a given Compendium pack.\nOptionally update existing Documents within the Pack by name, otherwise append all new entries."
-      },
-      "exportDialog": {
-        "type": "method",
-        "detail": "(pack, options?) => Promise<void>",
-        "info": "Provide a dialog form that allows for exporting the contents of a Folder into an eligible Compendium pack."
-      },
-      "getSubfolders": {
-        "type": "method",
-        "detail": "(recursive?) => Folder.Stored<SubType>[]",
-        "info": "Get the Folder documents which are sub-folders of the current folder, either direct children or recursively."
-      },
-      "getParentFolders": {
-        "type": "method",
-        "detail": "() => Folder.Stored<SubType>[]",
-        "info": "Get the Folder documents which are parent folders of the current folder or any if its parents."
-      },
-      "defaultName": {
-        "type": "method",
-        "detail": "(context?) => string"
-      },
-      "fromDropData": {
-        "type": "method",
-        "detail": "(data, options?) => Promise<Folder.Implementation | undefined>"
-      },
-      "fromImport": {
-        "type": "method",
-        "detail": "(source, context?) => Promise<Folder.Implementation>"
       }
     }
   },
   "Scene": {
     "type": "class",
     "detail": "Scene",
-    "children": {
+    "constructorDetail": "(data, context?) => Scene",
+    "staticChildren": {
+      "defaultName": {
+        "type": "method",
+        "detail": "(context?) => string"
+      },
+      "createDialog": {
+        "type": "method",
+        "detail": "(data?, createOptions?, options?) => Promise<Scene.Stored | null | undefined>"
+      },
+      "fromDropData": {
+        "type": "method",
+        "detail": "(data, options?) => Promise<Scene.Implementation | undefined>"
+      },
+      "fromImport": {
+        "type": "method",
+        "detail": "(source, context?) => Promise<Scene.Implementation>"
+      }
+    },
+    "instanceChildren": {
       "grid": {
         "type": "property",
         "detail": "foundry.grid.BaseGrid",
@@ -1113,6 +2078,16 @@
         "type": "property",
         "detail": "Scene.Dimensions",
         "info": "Determine the canvas dimensions this Scene would occupy, if rendered"
+      },
+      "thumbnail": {
+        "type": "property",
+        "detail": "string | null",
+        "info": "Provide a thumbnail image path used to represent this document."
+      },
+      "isView": {
+        "type": "property",
+        "detail": "boolean",
+        "info": "A convenience accessor for whether the Scene is currently viewed"
       },
       "pullUsers": {
         "type": "method",
@@ -1174,32 +2149,35 @@
         "detail": "(data?) => Promise<ImageHelper.ThumbnailReturn>",
         "info": "Create a 300px by 100px thumbnail image for this scene background"
       },
-      "defaultName": {
-        "type": "method",
-        "detail": "(context?) => string"
-      },
-      "createDialog": {
-        "type": "method",
-        "detail": "(data?, createOptions?, options?) => Promise<Scene.Stored | null | undefined>"
-      },
       "deleteDialog": {
         "type": "method",
         "detail": "(options?, operation?) => Promise<this | false | null | undefined>"
-      },
-      "fromDropData": {
-        "type": "method",
-        "detail": "(data, options?) => Promise<Scene.Implementation | undefined>"
-      },
-      "fromImport": {
-        "type": "method",
-        "detail": "(source, context?) => Promise<Scene.Implementation>"
       }
     }
   },
   "User": {
     "type": "class",
     "detail": "User",
-    "children": {
+    "constructorDetail": "(data, context?) => User",
+    "staticChildren": {
+      "defaultName": {
+        "type": "method",
+        "detail": "(context?) => string"
+      },
+      "createDialog": {
+        "type": "method",
+        "detail": "(data?, createOptions?, options?) => Promise<User.Stored | null | undefined>"
+      },
+      "fromDropData": {
+        "type": "method",
+        "detail": "(data, options?) => Promise<User.Implementation | undefined>"
+      },
+      "fromImport": {
+        "type": "method",
+        "detail": "(source, context?) => Promise<User.Implementation>"
+      }
+    },
+    "instanceChildren": {
       "active": {
         "type": "property",
         "detail": "boolean",
@@ -1219,6 +2197,31 @@
         "type": "property",
         "detail": "Set<TokenDocument.Implementation>",
         "info": "Track the Token documents that this User is currently moving."
+      },
+      "isTrusted": {
+        "type": "property",
+        "detail": "boolean",
+        "info": "A flag for whether the current User is a Trusted Player"
+      },
+      "isSelf": {
+        "type": "property",
+        "detail": "boolean",
+        "info": "A flag for whether this User is the connected client"
+      },
+      "isActiveGM": {
+        "type": "property",
+        "detail": "boolean",
+        "info": "Is this User the active GM?"
+      },
+      "roleLabel": {
+        "type": "property",
+        "detail": "string",
+        "info": "A localized label for this User's role."
+      },
+      "lastActivityTime": {
+        "type": "property",
+        "detail": "number",
+        "info": "The timestamp of the lats observed activity for the user."
       },
       "prepareDerivedData": {
         "type": "method",
@@ -1258,91 +2261,78 @@
         "detail": "(queryName, queryData, { timeout }?) => Promise<User.QueryReturn<QueryName>>",
         "info": "Query this user"
       },
-      "defaultName": {
-        "type": "method",
-        "detail": "(context?) => string"
-      },
-      "createDialog": {
-        "type": "method",
-        "detail": "(data?, createOptions?, options?) => Promise<User.Stored | null | undefined>"
-      },
       "deleteDialog": {
         "type": "method",
         "detail": "(options?, operation?) => Promise<this | false | null | undefined>"
-      },
-      "fromDropData": {
-        "type": "method",
-        "detail": "(data, options?) => Promise<User.Implementation | undefined>"
-      },
-      "fromImport": {
-        "type": "method",
-        "detail": "(source, context?) => Promise<User.Implementation>"
-      }
-    }
-  },
-  "ActiveEffect": {
-    "type": "class",
-    "detail": "ActiveEffect",
-    "children": {
-      "fromStatusEffect": {
-        "type": "method",
-        "detail": "(statusId, options?) => Promise<ActiveEffect.Implementation>",
-        "info": "Create an ActiveEffect instance from some status effect ID.\nDelegates to  to create the ActiveEffect instance\nafter creating the ActiveEffect data from the status effect data if `CONFIG.statusEffects`"
-      },
-      "prepareDerivedData": {
-        "type": "method",
-        "detail": "() => void"
-      },
-      "updateDuration": {
-        "type": "method",
-        "detail": "() => ActiveEffect.Duration",
-        "info": "Update derived Active Effect duration data.\nConfigure the remaining and label properties to be getters which lazily recompute only when necessary."
-      },
-      "applyField": {
-        "type": "method",
-        "detail": "(model, change, field?) => ActiveEffect.ApplyFieldReturn<Field>",
-        "info": "Apply ActiveEffect.EffectChangeData to a field within a DataModel."
-      },
-      "apply": {
-        "type": "method",
-        "detail": "(actor, change) => AnyMutableObject",
-        "info": "Apply this ActiveEffect to a provided Actor."
-      },
-      "getInitialDuration": {
-        "type": "method",
-        "detail": "() => ActiveEffect.GetInitialDurationReturn",
-        "info": "Retrieve the initial duration configuration."
-      },
-      "defaultName": {
-        "type": "method",
-        "detail": "(context) => string"
-      },
-      "createDialog": {
-        "type": "method",
-        "detail": "(data, createOptions, options?) => Promise<ActiveEffect.Stored | null | undefined>"
-      },
-      "deleteDialog": {
-        "type": "method",
-        "detail": "(options?, operation?) => Promise<this | false | null | undefined>"
-      },
-      "fromDropData": {
-        "type": "method",
-        "detail": "(data, options?) => Promise<ActiveEffect.Implementation | undefined>"
-      },
-      "fromImport": {
-        "type": "method",
-        "detail": "(source, context?) => Promise<ActiveEffect.Implementation>"
       }
     }
   },
   "Combatant": {
     "type": "class",
     "detail": "Combatant",
-    "children": {
+    "constructorDetail": "(data, context) => Combatant",
+    "staticChildren": {
+      "defaultName": {
+        "type": "method",
+        "detail": "(context) => string"
+      },
+      "createDialog": {
+        "type": "method",
+        "detail": "(data, createOptions, options?) => Promise<Combatant.Stored | null | undefined>"
+      },
+      "fromDropData": {
+        "type": "method",
+        "detail": "(data, options?) => Promise<Combatant.Implementation | undefined>"
+      },
+      "fromImport": {
+        "type": "method",
+        "detail": "(source, context?) => Promise<Combatant.Implementation>"
+      }
+    },
+    "instanceChildren": {
       "resource": {
         "type": "property",
         "detail": "Combatant.Resource | null",
         "info": "The current value of the special tracked resource which pertains to this Combatant"
+      },
+      "combat": {
+        "type": "property",
+        "detail": "Combat.Implementation | null",
+        "info": "A convenience alias of Combatant#parent which is more semantically intuitive"
+      },
+      "isNPC": {
+        "type": "property",
+        "detail": "boolean",
+        "info": "This is treated as a non-player combatant if it has no associated actor and no player users who can control it"
+      },
+      "permission": {
+        "type": "property",
+        "detail": "CONST.DOCUMENT_OWNERSHIP_LEVELS",
+        "info": "Eschew `ClientDocument`'s redirection to `Combat#permission` in favor of special ownership determination."
+      },
+      "visible": {
+        "type": "property",
+        "detail": "boolean"
+      },
+      "actor": {
+        "type": "property",
+        "detail": "Actor.Implementation | null",
+        "info": "A reference to the Actor document which this Combatant represents, if any"
+      },
+      "token": {
+        "type": "property",
+        "detail": "TokenDocument.Implementation | null",
+        "info": "A reference to the Token document which this Combatant represents, if any"
+      },
+      "players": {
+        "type": "property",
+        "detail": "User.Implementation[]",
+        "info": "An array of non-Gamemaster Users who have ownership of this Combatant."
+      },
+      "isDefeated": {
+        "type": "property",
+        "detail": "boolean",
+        "info": "Has this combatant been marked as defeated?"
       },
       "getInitiativeRoll": {
         "type": "method",
@@ -1364,9 +2354,40 @@
         "info": "Update the value of the tracked resource for this Combatant."
       },
       "clearMovementHistory": {
-        "type": "property",
-        "detail": "Promise<void>",
+        "type": "method",
+        "detail": "() => Promise<void>",
         "info": "Clear the movement history of the Combatant's Token."
+      },
+      "deleteDialog": {
+        "type": "method",
+        "detail": "(options?, operation?) => Promise<this | false | null | undefined>"
+      }
+    }
+  },
+  "TokenDocument": {
+    "type": "class",
+    "detail": "TokenDocument",
+    "constructorDetail": "(data?, context?) => TokenDocument",
+    "staticChildren": {
+      "createCombatants": {
+        "type": "method",
+        "detail": "(tokens, options?) => Promise<Combatant.Implementation[]>",
+        "info": "Create or remove Combatants for an array of provided Token objects."
+      },
+      "deleteCombatants": {
+        "type": "method",
+        "detail": "(tokens, options?) => Promise<Combatant.Implementation[]>",
+        "info": "Remove Combatants for the array of provided Tokens."
+      },
+      "getTrackedAttributes": {
+        "type": "method",
+        "detail": "(data?, _path?) => TokenDocument.TrackedAttributesDescription",
+        "info": "Get an Array of attribute choices which could be tracked for Actors in the Combat Tracker"
+      },
+      "getTrackedAttributeChoices": {
+        "type": "method",
+        "detail": "(attributes?) => TokenDocument.TrackedAttributesChoice[]",
+        "info": "Inspect the Actor data model and identify the set of attributes which could be used for a Token Bar"
       },
       "defaultName": {
         "type": "method",
@@ -1374,30 +2395,72 @@
       },
       "createDialog": {
         "type": "method",
-        "detail": "(data, createOptions, options?) => Promise<Combatant.Stored | null | undefined>"
-      },
-      "deleteDialog": {
-        "type": "method",
-        "detail": "(options?, operation?) => Promise<this | false | null | undefined>"
+        "detail": "(data, createOptions, options?) => Promise<TokenDocument.Stored | null | undefined>"
       },
       "fromDropData": {
         "type": "method",
-        "detail": "(data, options?) => Promise<Combatant.Implementation | undefined>"
+        "detail": "(data, options?) => Promise<TokenDocument.Implementation | undefined>"
       },
       "fromImport": {
         "type": "method",
-        "detail": "(source, context?) => Promise<Combatant.Implementation>"
+        "detail": "(source, context?) => Promise<TokenDocument.Implementation>"
       }
-    }
-  },
-  "TokenDocument": {
-    "type": "class",
-    "detail": "TokenDocument",
-    "children": {
+    },
+    "instanceChildren": {
+      "movement": {
+        "type": "property",
+        "detail": "DeepReadonly<TokenDocument.MovementData>",
+        "info": "The current movement data of this Token document."
+      },
       "actors": {
         "type": "property",
         "detail": "TokenDocument.PseudoActorCollection",
         "info": "A singleton collection which holds a reference to the synthetic token actor by its base actor's ID."
+      },
+      "actor": {
+        "type": "property",
+        "detail": "Actor.Implementation | null",
+        "info": "A lazily evaluated reference to the Actor this Token modifies.\nIf actorLink is true, then the document is the primary Actor document.\nOtherwise the Actor document is a synthetic (ephemeral) document c"
+      },
+      "baseActor": {
+        "type": "property",
+        "detail": "Actor.Implementation | null",
+        "info": "A reference to the base, World-level Actor this token represents."
+      },
+      "isOwner": {
+        "type": "property",
+        "detail": "boolean",
+        "info": "An indicator for whether or not the current User has full control over this Token document."
+      },
+      "isLinked": {
+        "type": "property",
+        "detail": "boolean",
+        "info": "A convenient reference for whether this TokenDocument is linked to the Actor it represents, or is a synthetic copy"
+      },
+      "isSecret": {
+        "type": "property",
+        "detail": "boolean",
+        "info": "Does this TokenDocument have the SECRET disposition and is the current user lacking the necessary permissions\nthat would reveal this secret?"
+      },
+      "combatant": {
+        "type": "property",
+        "detail": "Combatant.Implementation | null",
+        "info": "Return a reference to a Combatant that represents this Token, if one is present in the current encounter."
+      },
+      "inCombat": {
+        "type": "property",
+        "detail": "boolean",
+        "info": "An indicator for whether or not this Token is currently involved in the active combat encounter."
+      },
+      "movementHistory": {
+        "type": "property",
+        "detail": "TokenDocument.MeasuredMovementWaypoint[]",
+        "info": "The movement history"
+      },
+      "hasDistinctSubjectTexture": {
+        "type": "property",
+        "detail": "boolean",
+        "info": "Check if the document has a distinct subject texture (inferred or explicit)."
       },
       "regions": {
         "type": "property",
@@ -1449,7 +2512,7 @@
       "pauseMovement": {
         "type": "method",
         "detail": "(key?) => (() => Promise<boolean>) | Promise<boolean> | null",
-        "info": "Pause the movement of this Token document. The movement can be resumed after being paused.\nOnly the User that initiated the movement can pause it.\nReturns a callback that can be used to resume the mov"
+        "info": "Pause the movement of this Token document. The movement can be resumed after being paused.\n\nOnly the User that initiated the movement can pause it.\n\nReturns a promise that resolves to true if the move"
       },
       "resumeMovement": {
         "type": "method",
@@ -1470,16 +2533,6 @@
         "type": "method",
         "detail": "(options?) => Promise<boolean>",
         "info": "Add or remove this Token from a Combat encounter."
-      },
-      "createCombatants": {
-        "type": "method",
-        "detail": "(tokens, options?) => Promise<Combatant.Implementation[]>",
-        "info": "Create or remove Combatants for an array of provided Token objects."
-      },
-      "deleteCombatants": {
-        "type": "method",
-        "detail": "(tokens, options?) => Promise<Combatant.Implementation[]>",
-        "info": "Remove Combatants for the array of provided Tokens."
       },
       "updateVisionMode": {
         "type": "method",
@@ -1505,394 +2558,14 @@
         "detail": "(region, waypoints) => RegionDocument.MovementSegment[]",
         "info": "Split the Token movement path through the Region into its segments.\nThe Token and the Region must be in the same Scene.\n\nImplementations of this function are restricted in the following ways:\n  - The "
       },
-      "getTrackedAttributes": {
-        "type": "method",
-        "detail": "(data?, _path?) => TokenDocument.TrackedAttributesDescription",
-        "info": "Get an Array of attribute choices which could be tracked for Actors in the Combat Tracker"
-      },
-      "getTrackedAttributeChoices": {
-        "type": "method",
-        "detail": "(attributes?) => TokenDocument.TrackedAttributesChoice[]",
-        "info": "Inspect the Actor data model and identify the set of attributes which could be used for a Token Bar"
-      },
       "toggleActiveEffect": {
         "type": "method",
         "detail": "(effectData, options?) => Promise<boolean>",
         "info": "A helper function to toggle a status effect which includes an Active Effect template"
       },
-      "defaultName": {
-        "type": "method",
-        "detail": "(context) => string"
-      },
-      "createDialog": {
-        "type": "method",
-        "detail": "(data, createOptions, options?) => Promise<TokenDocument.Stored | null | undefined>"
-      },
       "deleteDialog": {
         "type": "method",
         "detail": "(options?, operation?) => Promise<this | false | null | undefined>"
-      },
-      "fromDropData": {
-        "type": "method",
-        "detail": "(data, options?) => Promise<TokenDocument.Implementation | undefined>"
-      },
-      "fromImport": {
-        "type": "method",
-        "detail": "(source, context?) => Promise<TokenDocument.Implementation>"
-      }
-    }
-  },
-  "Game": {
-    "type": "class",
-    "detail": "Game",
-    "children": {}
-  },
-  "Notifications": {
-    "type": "class",
-    "detail": "Notifications",
-    "children": {
-      "MAX_ACTIVE": {
-        "type": "property",
-        "detail": "number",
-        "info": "The maximum number of active notifications."
-      },
-      "LIFETIME_MS": {
-        "type": "property",
-        "detail": "number",
-        "info": "The maximum number of active notifications."
-      },
-      "notify": {
-        "type": "method",
-        "detail": "(message, type?, options?) => Notifications.Notification<Coalesce<T, \"info\">>",
-        "info": "Push a new notification into the queue"
-      },
-      "info": {
-        "type": "method",
-        "detail": "(message, options?) => Notifications.Notification<\"info\">",
-        "info": "Display a notification with the \"info\" type"
-      },
-      "warn": {
-        "type": "method",
-        "detail": "(message, options?) => Notifications.Notification<\"warning\">",
-        "info": "Display a notification with the \"warning\" type"
-      },
-      "error": {
-        "type": "method",
-        "detail": "(message, options?) => Notifications.Notification<\"error\">",
-        "info": "Display a notification with the \"error\" type"
-      },
-      "success": {
-        "type": "method",
-        "detail": "(message, options?) => Notifications.Notification<\"success\">",
-        "info": "Display a notification with the \"success\" type."
-      },
-      "update": {
-        "type": "method",
-        "detail": "(notification, update) => void",
-        "info": "Update the progress of the notification."
-      },
-      "remove": {
-        "type": "method",
-        "detail": "(id) => void",
-        "info": "Remove the notification linked to the ID."
-      },
-      "has": {
-        "type": "method",
-        "detail": "(id) => boolean",
-        "info": "Does the notification linked to the ID exist?."
-      },
-      "clear": {
-        "type": "method",
-        "detail": "() => void",
-        "info": "Clear all notifications."
-      }
-    }
-  },
-  "ClientSettings": {
-    "type": "class",
-    "detail": "ClientSettings",
-    "children": {
-      "settings": {
-        "type": "property",
-        "detail": "ClientSettings.SettingsMap",
-        "info": "A object of registered game settings for this scope"
-      },
-      "menus": {
-        "type": "property",
-        "detail": "Map<string, ClientSettings.SettingSubmenuConfig>",
-        "info": "Registered settings menus which trigger secondary applications"
-      },
-      "storage": {
-        "type": "property",
-        "detail": "Map<string, Storage | collections.WorldSettings>",
-        "info": "The storage interfaces used for persisting settings\nEach storage interface shares the same API as window.localStorage"
-      },
-      "register": {
-        "type": "method",
-        "detail": "(namespace, key, data) => void",
-        "info": "Register a new namespaced game setting. The setting's scope determines where the setting is saved.\nWorld - World settings are applied to everyone in the World. Use this for settings like system rule v"
-      },
-      "registerMenu": {
-        "type": "method",
-        "detail": "(namespace, key, data) => void",
-        "info": "Register a new sub-settings menu"
-      },
-      "get": {
-        "type": "method",
-        "detail": "(namespace, key, options?) => ClientSettings.Get<N, K, Doc>",
-        "info": "Get the value of a game setting for a certain namespace and setting key"
-      },
-      "set": {
-        "type": "method",
-        "detail": "(namespace, key, value, options?) => Promise<ClientSettings.Get<N, K, Doc>>",
-        "info": "Set the value of a game setting for a certain namespace and setting key"
-      }
-    }
-  },
-  "Localization": {
-    "type": "class",
-    "detail": "Localization",
-    "children": {
-      "lang": {
-        "type": "property",
-        "detail": "string",
-        "info": "The target language for localization"
-      },
-      "defaultModule": {
-        "type": "property",
-        "detail": "string",
-        "info": "The package authorized to provide default language configurations"
-      },
-      "translations": {
-        "type": "property",
-        "detail": "Localization.Translations",
-        "info": "The translation dictionary for the target language"
-      },
-      "initialize": {
-        "type": "method",
-        "detail": "() => Promise<void>",
-        "info": "Initialize the Localization module\nDiscover available language translations and apply the current language setting"
-      },
-      "localizeDataModel": {
-        "type": "method",
-        "detail": "(model, options?) => void",
-        "info": "Perform one-time localization of the fields in a DataModel schema, translating their label and hint properties."
-      },
-      "localizeSchema": {
-        "type": "method",
-        "detail": "(schema, prefixes?, options?) => void",
-        "info": "Localize the \"label\" and \"hint\" properties for all fields in a data schema."
-      },
-      "setLanguage": {
-        "type": "method",
-        "detail": "(lang) => Promise<void>",
-        "info": "Set a language as the active translation source for the session"
-      },
-      "has": {
-        "type": "method",
-        "detail": "(stringId, fallback?) => boolean",
-        "info": "Return whether a certain string has a known translation defined."
-      },
-      "localize": {
-        "type": "method",
-        "detail": "(stringId) => string",
-        "info": "Localize a string by drawing a translation from the available translations dictionary, if available\nIf a translation is not available, the original string is returned"
-      },
-      "format": {
-        "type": "method",
-        "detail": "(stringId, data?) => string",
-        "info": "Localize a string including variable formatting for input arguments.\nProvide a string ID which defines the localized template.\nVariables can be included in the template enclosed in braces and will be "
-      },
-      "getListFormatter": {
-        "type": "method",
-        "detail": "(options?) => Intl.ListFormat",
-        "info": "Retrieve list formatter configured to the world's language setting."
-      },
-      "sortObjects": {
-        "type": "method",
-        "detail": "(objects, key) => T[]",
-        "info": "Sort an array of objects by a given key in a localization-aware manner."
-      }
-    }
-  },
-  "Roll": {
-    "type": "class",
-    "detail": "Roll",
-    "children": {
-      "data": {
-        "type": "property",
-        "detail": "D",
-        "info": "The original provided data object which substitutes into attributes of the roll formula"
-      },
-      "options": {
-        "type": "property",
-        "detail": "Roll.Options",
-        "info": "Options which modify or describe the Roll"
-      },
-      "terms": {
-        "type": "property",
-        "detail": "RollTerm[]",
-        "info": "The identified terms of the Roll"
-      },
-      "MATH_PROXY": {
-        "type": "property",
-        "detail": "Math",
-        "info": "A Proxy environment for safely evaluating a string using only available Math functions"
-      },
-      "CHAT_TEMPLATE": {
-        "type": "property",
-        "detail": "string",
-        "info": "The HTML template path used to render a complete Roll object to the chat log"
-      },
-      "TOOLTIP_TEMPLATE": {
-        "type": "property",
-        "detail": "string",
-        "info": "The HTML template used to render an expanded Roll tooltip to the chat log"
-      },
-      "RESOLVERS": {
-        "type": "property",
-        "detail": "Map<Roll, RollResolver>",
-        "info": "A mapping of Roll instances to currently-active resolvers."
-      },
-      "alter": {
-        "type": "method",
-        "detail": "(multiply, add, { multiplyNumeric }?) => this",
-        "info": "Alter the Roll expression by adding or multiplying the number of dice which are rolled"
-      },
-      "clone": {
-        "type": "method",
-        "detail": "() => this",
-        "info": "Clone the Roll instance, returning a new Roll instance that has not yet been evaluated."
-      },
-      "evaluate": {
-        "type": "method",
-        "detail": "({\n    minimize,\n    maximize,\n    allowStrings,\n    allowInteractive,\n    ...options\n  }?) => Promise<Roll.Evaluated<this>>",
-        "info": "Execute the Roll, replacing dice and evaluating the total result"
-      },
-      "evaluateSync": {
-        "type": "method",
-        "detail": "({ minimize, maximize, allowStrings, strict }?) => Roll.Evaluated<this>",
-        "info": "Execute the Roll synchronously, replacing dice and evaluating the total result."
-      },
-      "roll": {
-        "type": "method",
-        "detail": "(options?) => Promise<Roll.Evaluated<this>>",
-        "info": "Alias for evaluate."
-      },
-      "reroll": {
-        "type": "method",
-        "detail": "(options?) => Promise<Roll.Evaluated<this>>",
-        "info": "Create a new Roll object using the original provided formula and data.\nEach roll is immutable, so this method returns a new Roll instance using the same data."
-      },
-      "resetFormula": {
-        "type": "method",
-        "detail": "() => string",
-        "info": "Recompile the formula string that represents this Roll instance from its component terms."
-      },
-      "propagateFlavor": {
-        "type": "method",
-        "detail": "(flavor) => void",
-        "info": "Propagate flavor text across all terms that do not have any."
-      },
-      "create": {
-        "type": "method",
-        "detail": "(formula, data?, options?) => typeof CONFIG.Dice.rolls extends [infer T] ? T : Roll<D>",
-        "info": "A factory method which constructs a Roll instance using the default configured Roll class."
-      },
-      "getFormula": {
-        "type": "method",
-        "detail": "(terms) => string",
-        "info": "Transform an array of RollTerm objects into a cleaned string formula representation."
-      },
-      "safeEval": {
-        "type": "method",
-        "detail": "(expression) => number",
-        "info": "A sandbox-safe evaluation function to execute user-input code with access to scoped Math methods."
-      },
-      "simplifyTerms": {
-        "type": "method",
-        "detail": "(terms) => RollTerm[]",
-        "info": "After parenthetical and arithmetic terms have been resolved, we need to simplify the remaining expression.\nAny remaining string terms need to be combined with adjacent non-operators in order to constr"
-      },
-      "simulate": {
-        "type": "method",
-        "detail": "(formula, n?) => Promise<number[]>",
-        "info": "Simulate a roll and evaluate the distribution of returned results"
-      },
-      "registerResult": {
-        "type": "method",
-        "detail": "(method, denomination, result) => boolean | void",
-        "info": "Register an externally-fulfilled result with an active RollResolver."
-      },
-      "parse": {
-        "type": "method",
-        "detail": "(formula, data) => RollTerm[]",
-        "info": "Parse a formula expression using the compiled peggy grammar."
-      },
-      "instantiateAST": {
-        "type": "method",
-        "detail": "(ast) => RollTerm[]",
-        "info": "Instantiate the nodes in an AST sub-tree into RollTerm instances."
-      },
-      "replaceFormulaData": {
-        "type": "method",
-        "detail": "(formula, data, options?) => string",
-        "info": "Replace referenced data attributes in the roll formula with values from the provided data.\nData references in the formula use the \\@attr syntax and would reference the corresponding attr key."
-      },
-      "validate": {
-        "type": "method",
-        "detail": "(formula) => boolean",
-        "info": "Validate that a provided roll formula can represent a valid"
-      },
-      "identifyFulfillableTerms": {
-        "type": "method",
-        "detail": "(terms) => DiceTerm[]",
-        "info": "Determine which of the given terms require external fulfillment."
-      },
-      "getTooltip": {
-        "type": "method",
-        "detail": "() => Promise<string>",
-        "info": "Render the tooltip HTML for a Roll instance"
-      },
-      "render": {
-        "type": "method",
-        "detail": "(options?) => Promise<string>",
-        "info": "Render a Roll instance to HTML"
-      },
-      "toMessage": {
-        "type": "method",
-        "detail": "(messageData?, options?) => Promise<Roll.ToMessageReturn<Create>>",
-        "info": "Transform a Roll instance into a ChatMessage, displaying the roll result.\nThis function can either create the ChatMessage directly, or return the data object that will be used to create."
-      },
-      "expandInlineResult": {
-        "type": "method",
-        "detail": "(a) => Promise<void>",
-        "info": "Expand an inline roll element to display its contained dice result as a tooltip."
-      },
-      "collapseInlineResult": {
-        "type": "method",
-        "detail": "(a) => void",
-        "info": "Collapse an expanded inline roll to conceal its tooltip."
-      },
-      "toAnchor": {
-        "type": "method",
-        "detail": "(options?) => HTMLAnchorElement",
-        "info": "Construct an inline roll link for this Roll."
-      },
-      "fromData": {
-        "type": "method",
-        "detail": "(this, data) => FixedInstanceType<T>",
-        "info": "Recreate a Roll instance using a provided data object"
-      },
-      "fromJSON": {
-        "type": "method",
-        "detail": "(this, json) => FixedInstanceType<T>",
-        "info": "Recreate a Roll instance using a provided JSON string"
-      },
-      "fromTerms": {
-        "type": "method",
-        "detail": "(this, terms, options?) => FixedInstanceType<T>",
-        "info": "Manually construct a Roll object by providing an explicit set of input terms"
       }
     }
   }

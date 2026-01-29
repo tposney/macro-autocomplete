@@ -15,8 +15,8 @@
  * shows the parameter signature with the current parameter highlighted.
  *
  * Completion sources:
- * 1. Static completions (foundry.utils, game, canvas, ui, etc.)
- * 2. foundryCompletions.json - generated from fvtt-types at build time
+ * 1. Runtime global introspection (foundry.utils, game, canvas, ui, Hooks, CONST, system globals, etc.)
+ * 2. foundryCompletions.json - generated from fvtt-types at build time (static/instance member separation)
  * 3. dnd5e DataModel schemas - walked at runtime (if dnd5e is installed)
  * 4. Module-injected completions via "macro-autocomplete.ready" hook
  */
@@ -29,7 +29,11 @@ interface CompletionEntry {
   type?: string;
   detail?: string;
   info?: string;
-  children?: CompletionNode;
+  children?: CompletionNode;          // Structural sub-properties (schema data, sub-objects, namespaces)
+  staticChildren?: CompletionNode;    // Static class members (e.g., Actor.create)
+  instanceChildren?: CompletionNode;  // Instance members (e.g., actor.update)
+  constructorDetail?: string; // e.g. "(formula, data?) => Roll" - for signature hints on `new ClassName(`
+  returnType?: string; // Class name whose instanceChildren to use for the return value
 }
 
 interface CompletionNode {
@@ -39,570 +43,53 @@ interface CompletionNode {
 // Use let so we can augment with schema-generated completions at runtime
 let COMPLETION_TREE: CompletionNode = {
   foundry: {
+    type: "object", detail: "object", info: "Foundry VTT core namespace",
     children: {
       utils: {
-        children: {
-          // Object manipulation
-          mergeObject: { type: "function", detail: "(original, other, options?) => object", info: "Recursively merge other into original. Options: insertKeys, insertValues, overwrite, recursive, inplace, performDeletions" },
-          deepClone: { type: "function", detail: "(original, options?) => any", info: "Recursively deep clone an object or array" },
-          duplicate: { type: "function", detail: "(original) => any", info: "Fast clone via JSON parse/stringify" },
-          diffObject: { type: "function", detail: "(original, other, options?) => object", info: "Return keys/values in other that differ from original" },
-          flattenObject: { type: "function", detail: "(obj) => object", info: "Flatten nested object to dot-notation keys: {a:{b:1}} => {'a.b':1}" },
-          expandObject: { type: "function", detail: "(obj) => object", info: "Expand dot-notation keys back to nested object" },
-          filterObject: { type: "function", detail: "(source, template, options?) => object", info: "Filter source to only keys present in template" },
-          objectsEqual: { type: "function", detail: "(a, b) => boolean", info: "Deep equality test for two objects" },
-          invertObject: { type: "function", detail: "(obj) => object", info: "Swap keys and values" },
-          deepFreeze: { type: "function", detail: "(obj) => object", info: "Recursively freeze an object (immutable)" },
-
-          // Property access
-          getProperty: { type: "function", detail: "(object, key) => any", info: "Get value using dot-notation key: getProperty(obj, 'a.b.c')" },
-          setProperty: { type: "function", detail: "(object, key, value) => boolean", info: "Set value using dot-notation key, creating intermediates" },
-          hasProperty: { type: "function", detail: "(object, key) => boolean", info: "Test for nested property using dot-notation key" },
-          deleteProperty: { type: "function", detail: "(object, key) => boolean", info: "Delete nested property using dot-notation key" },
-
-          // Type checking
-          getType: { type: "function", detail: "(variable) => string", info: "Get type as string: 'Array', 'Object', 'Set', 'Map', 'number', etc." },
-          isEmpty: { type: "function", detail: "(value) => boolean", info: "Test if value is empty (null, undefined, empty array/object/Set/Map)" },
-          isSubclass: { type: "function", detail: "(cls, parent) => boolean", info: "Test if cls extends parent" },
-
-          // String / HTML
-          escapeHTML: { type: "function", detail: "(value) => string", info: "Escape &, <, >, \", ' for safe HTML insertion" },
-          unescapeHTML: { type: "function", detail: "(value) => string", info: "Unescape HTML entities back to characters" },
-          parseHTML: { type: "function", detail: "(html) => Node", info: "Parse HTML string into a DOM node" },
-          encodeURL: { type: "function", detail: "(path) => string", info: "Encode URL preserving protocol" },
-
-          // UUID
-          parseUuid: { type: "function", detail: "(uuid, options?) => object", info: "Parse UUID into parts: documentType, id, etc." },
-          buildUuid: { type: "function", detail: "({id, documentName, parent, pack}) => string", info: "Build a UUID from parts" },
-          fromUuid: { type: "function", detail: "(uuid) => Promise<Document>", info: "Async resolve a UUID to its document" },
-          fromUuidSync: { type: "function", detail: "(uuid) => Document|null", info: "Sync resolve a UUID (must be already loaded)" },
-
-          // Utility
-          randomID: { type: "function", detail: "(length?) => string", info: "Generate random alphanumeric string (default 16 chars)" },
-          isNewerVersion: { type: "function", detail: "(v1, v0) => boolean", info: "Test if v1 is newer than v0" },
-          debounce: { type: "function", detail: "(callback, delay) => Function", info: "Wrap callback with debounced timeout (ms)" },
-          throttle: { type: "function", detail: "(callback, delay) => Function", info: "Wrap callback with throttled timeout (ms)" },
-          timeSince: { type: "function", detail: "(date) => string", info: "Human-readable time since date ('2 hours ago')" },
-          formatFileSize: { type: "function", detail: "(size, options?) => string", info: "Format bytes to kB, MB, GB, etc." },
-          getRoute: { type: "function", detail: "(path, options?) => string", info: "Get URL route including configured path prefix" },
-
-          // Data I/O
-          saveDataToFile: { type: "function", detail: "(data, type, filename) => void", info: "Download data as a file" },
-          readTextFromFile: { type: "function", detail: "(file) => Promise<string>", info: "Read text content from a File object" },
-          fetchWithTimeout: { type: "function", detail: "(url, data?, options?) => Promise<Response>", info: "Fetch with AbortController timeout" },
-          fetchJsonWithTimeout: { type: "function", detail: "(url, data?, options?) => Promise<object>", info: "Fetch JSON with timeout" },
-
-          // Document helpers
-          getDocumentClass: { type: "function", detail: "(documentName) => class", info: "Get Document class for a type name ('Actor', 'Item', etc.)" },
-
-          // Logging
-          logCompatibilityWarning: { type: "function", detail: "(message, options?) => void", info: "Log a compatibility warning with version info" },
-        }
+        type: "object", detail: "object", info: "Foundry utility functions (populated at runtime)",
+        children: {}
       }
     }
   },
 
-  // ── Foundry Globals ──
+  // ── Core macro variables from Foundry's Macro#executeScript ──
+  // These are always available in script macros
+  // Instance methods populated at runtime by injectPrototypeCompletions()
 
-  game: {
-    children: {
-      actors: { type: "property", detail: "Actors", info: "Collection of all world actors" },
-      items: { type: "property", detail: "Items", info: "Collection of all world items" },
-      users: { type: "property", detail: "Users", info: "Collection of all users" },
-      user: { type: "property", detail: "User", info: "The current user" },
-      scenes: { type: "property", detail: "Scenes", info: "Collection of all scenes" },
-      combat: { type: "property", detail: "Combat | null", info: "The currently active combat" },
-      combats: { type: "property", detail: "CombatEncounters", info: "Collection of all combats" },
-      messages: { type: "property", detail: "Messages", info: "Collection of chat messages" },
-      journal: { type: "property", detail: "Journal", info: "Collection of journal entries" },
-      tables: { type: "property", detail: "RollTables", info: "Collection of roll tables" },
-      playlists: { type: "property", detail: "Playlists", info: "Collection of playlists" },
-      macros: { type: "property", detail: "Macros", info: "Collection of macros" },
-      packs: { type: "property", detail: "CompendiumPacks", info: "Collection of compendium packs" },
-      settings: {
-        type: "property", detail: "ClientSettings", info: "Game settings manager",
-        children: {
-          get: { type: "method", detail: "(scope, key) => any", info: "Get a setting value" },
-          set: { type: "method", detail: "(scope, key, value) => Promise", info: "Set a setting value" },
-          register: { type: "method", detail: "(scope, key, data) => void", info: "Register a new setting" },
-        }
-      },
-      i18n: {
-        type: "property", detail: "Localization", info: "Localization helper",
-        children: {
-          localize: { type: "method", detail: "(key) => string", info: "Localize a string" },
-          format: { type: "method", detail: "(key, data?) => string", info: "Localize and format a string" },
-          has: { type: "method", detail: "(key, fallback?) => boolean", info: "Check if translation exists" },
-        }
-      },
-      time: { type: "property", detail: "GameTime", info: "In-game time tracker" },
-      system: { type: "property", detail: "System", info: "The game system data" },
-      modules: { type: "property", detail: "Map<string, Module>", info: "Map of installed modules" },
-      ready: { type: "property", detail: "boolean", info: "Whether the game is fully initialized" },
-      paused: { type: "property", detail: "boolean", info: "Whether the game is paused" },
-      canvas: { type: "property", detail: "Canvas", info: "Reference to the canvas" },
-    }
-  },
-
-  canvas: {
-    children: {
-      tokens: {
-        type: "property", detail: "TokenLayer", info: "The token layer",
-        children: {
-          placeables: { type: "property", detail: "Token[]", info: "All tokens on the canvas" },
-          controlled: { type: "property", detail: "Token[]", info: "Currently controlled tokens" },
-          get: { type: "method", detail: "(id) => Token | undefined", info: "Get a token by ID" },
-          ownedTokens: { type: "property", detail: "Token[]", info: "Tokens owned by current user" },
-        }
-      },
-      scene: { type: "property", detail: "Scene | null", info: "The currently viewed scene" },
-      grid: {
-        type: "property", detail: "BaseGrid", info: "The canvas grid",
-        children: {
-          size: { type: "property", detail: "number", info: "Grid size in pixels" },
-          distance: { type: "property", detail: "number", info: "Distance per grid unit" },
-          units: { type: "property", detail: "string", info: "Distance unit label" },
-          measurePath: { type: "method", detail: "(waypoints, options?) => object", info: "Measure distance along a path" },
-        }
-      },
-      walls: { type: "property", detail: "WallsLayer", info: "The walls layer" },
-      lighting: { type: "property", detail: "LightingLayer", info: "The lighting layer" },
-      templates: {
-        type: "property", detail: "TemplateLayer", info: "The measured templates layer",
-        children: {
-          placeables: { type: "property", detail: "MeasuredTemplate[]", info: "All templates on canvas" },
-          get: { type: "method", detail: "(id) => MeasuredTemplate | undefined", info: "Get template by ID" },
-        }
-      },
-      effects: { type: "property", detail: "EffectsLayer", info: "The visual effects layer" },
-      ready: { type: "property", detail: "boolean", info: "Whether the canvas is ready" },
-    }
-  },
-
-  ui: {
-    children: {
-      notifications: {
-        type: "property", detail: "Notifications", info: "Notification manager",
-        children: {
-          info: { type: "method", detail: "(message, options?) => void", info: "Show info notification" },
-          warn: { type: "method", detail: "(message, options?) => void", info: "Show warning notification" },
-          error: { type: "method", detail: "(message, options?) => void", info: "Show error notification" },
-        }
-      },
-      chat: { type: "property", detail: "ChatLog", info: "The chat log sidebar" },
-      combat: { type: "property", detail: "CombatTracker", info: "The combat tracker sidebar" },
-      actors: { type: "property", detail: "ActorDirectory", info: "The actors directory sidebar" },
-      items: { type: "property", detail: "ItemDirectory", info: "The items directory sidebar" },
-      windows: { type: "property", detail: "object", info: "Currently open application windows" },
-    }
-  },
-
-  ChatMessage: {
-    type: "class", detail: "class", info: "Chat message document class",
-    children: {
-      create: { type: "method", detail: "(data, options?) => Promise<ChatMessage>", info: "Create a new chat message" },
-      getSpeaker: { type: "method", detail: "(options?) => object", info: "Get speaker data for a chat message" },
-      applyRollMode: { type: "method", detail: "(chatData, rollMode) => object", info: "Apply roll mode to chat data" },
-    }
-  },
-
-  Roll: {
-    type: "class", detail: "class", info: "Dice roll class",
-    children: {
-      create: { type: "method", detail: "(formula, data?) => Roll", info: "Create a Roll instance" },
-      fromData: { type: "method", detail: "(data) => Roll", info: "Recreate Roll from serialized data" },
-      fromTerms: { type: "method", detail: "(terms) => Roll", info: "Create Roll from term array" },
-      simulate: { type: "method", detail: "(formula, n?) => number[]", info: "Simulate roll results" },
-    }
-  },
-
-  Hooks: {
-    type: "class", detail: "class", info: "Event hooks manager",
-    children: {
-      on: { type: "method", detail: "(hook, fn) => number", info: "Register a callback for a hook (returns hook ID)" },
-      once: { type: "method", detail: "(hook, fn) => number", info: "Register a one-time callback" },
-      off: { type: "method", detail: "(hook, fn) => void", info: "Unregister a callback" },
-      call: { type: "method", detail: "(hook, ...args) => boolean", info: "Call a hook, allowing interruption" },
-      callAll: { type: "method", detail: "(hook, ...args) => boolean", info: "Call a hook, no interruption" },
-    }
-  },
-
-  Dialog: {
-    type: "class", detail: "class", info: "Dialog application class",
-    children: {
-      confirm: { type: "method", detail: "({title, content, yes?, no?, ...}) => Promise<boolean>", info: "Show a yes/no confirmation dialog" },
-      prompt: { type: "method", detail: "({title, content, label?, callback?, ...}) => Promise<any>", info: "Show a single-button prompt dialog" },
-      wait: { type: "method", detail: "(data, options?, renderOptions?) => Promise<any>", info: "Show dialog and wait for button click" },
-    }
-  },
-
-  CONST: {
-    type: "object", detail: "object", info: "Foundry constants",
-    children: {
-      TOKEN_DISPOSITIONS: {
-        type: "object", detail: "object", info: "Token disposition values",
-        children: {
-          HOSTILE: { type: "constant", detail: "-1", info: "Hostile disposition" },
-          NEUTRAL: { type: "constant", detail: "0", info: "Neutral disposition" },
-          FRIENDLY: { type: "constant", detail: "1", info: "Friendly disposition" },
-        }
-      },
-      ACTIVE_EFFECT_MODES: {
-        type: "object", detail: "object", info: "Active effect application modes",
-        children: {
-          CUSTOM: { type: "constant", detail: "0", info: "Custom effect mode" },
-          MULTIPLY: { type: "constant", detail: "1", info: "Multiply value" },
-          ADD: { type: "constant", detail: "2", info: "Add to value" },
-          DOWNGRADE: { type: "constant", detail: "3", info: "Use lower of current/effect" },
-          UPGRADE: { type: "constant", detail: "4", info: "Use higher of current/effect" },
-          OVERRIDE: { type: "constant", detail: "5", info: "Replace value entirely" },
-        }
-      },
-      DOCUMENT_OWNERSHIP_LEVELS: {
-        type: "object", detail: "object", info: "Document permission levels",
-        children: {
-          NONE: { type: "constant", detail: "0", info: "No permission" },
-          LIMITED: { type: "constant", detail: "1", info: "Limited permission" },
-          OBSERVER: { type: "constant", detail: "2", info: "Observer permission" },
-          OWNER: { type: "constant", detail: "3", info: "Owner permission" },
-        }
-      },
-      DICE_ROLL_MODES: {
-        type: "object", detail: "object", info: "Roll visibility modes",
-        children: {
-          PUBLIC: { type: "constant", detail: "\"publicroll\"", info: "Visible to all" },
-          PRIVATE: { type: "constant", detail: "\"gmroll\"", info: "Visible to GM and owner" },
-          BLIND: { type: "constant", detail: "\"blindroll\"", info: "Visible only to GM" },
-          SELF: { type: "constant", detail: "\"selfroll\"", info: "Visible only to roller" },
-        }
-      },
-    }
-  },
-
-  fromUuid: { type: "function", detail: "(uuid) => Promise<Document>", info: "Async resolve a UUID to its document" },
-  fromUuidSync: { type: "function", detail: "(uuid) => Document | null", info: "Sync resolve a UUID (must be already loaded)" },
-
-  // ── dnd5e System (conditional on dnd5e being installed) ──
-
-  dnd5e: {
-    children: {
-      config: { type: "property", detail: "object", info: "System configuration (same as CONFIG.DND5E)" },
-      documents: {
-        type: "property", detail: "object", info: "System document classes",
-        children: {
-          Actor5e: { type: "class", detail: "class extends Actor", info: "D&D 5e Actor document class" },
-          Item5e: { type: "class", detail: "class extends Item", info: "D&D 5e Item document class" },
-          TokenDocument5e: { type: "class", detail: "class extends TokenDocument", info: "D&D 5e TokenDocument class" },
-          ActiveEffect5e: { type: "class", detail: "class extends ActiveEffect", info: "D&D 5e ActiveEffect class" },
-          Proficiency: { type: "class", detail: "class", info: "Proficiency handling class" },
-        }
-      },
-      applications: {
-        type: "property", detail: "object", info: "System application classes",
-        children: {
-          ActorSheet5e: { type: "class", detail: "class extends ActorSheet", info: "Base actor sheet class" },
-          ActorSheet5eCharacter: { type: "class", detail: "class extends ActorSheet5e", info: "Character sheet class" },
-          ActorSheet5eNPC: { type: "class", detail: "class extends ActorSheet5e", info: "NPC sheet class" },
-          ItemSheet5e: { type: "class", detail: "class extends ItemSheet", info: "Item sheet class" },
-          AbilityUseDialog: { type: "class", detail: "class extends Dialog", info: "Dialog for ability usage configuration" },
-          ShortRestDialog: { type: "class", detail: "class extends Dialog", info: "Short rest configuration dialog" },
-          LongRestDialog: { type: "class", detail: "class extends Dialog", info: "Long rest configuration dialog" },
-        }
-      },
-      dataModels: {
-        type: "property", detail: "object", info: "Data model classes",
-        children: {
-          actor: {
-            type: "property", detail: "object", info: "Actor data models",
-            children: {
-              CharacterData: { type: "class", detail: "class", info: "Character actor data model" },
-              NPCData: { type: "class", detail: "class", info: "NPC actor data model" },
-              VehicleData: { type: "class", detail: "class", info: "Vehicle actor data model" },
-              GroupData: { type: "class", detail: "class", info: "Group actor data model" },
-            }
-          },
-          item: {
-            type: "property", detail: "object", info: "Item data models",
-            children: {
-              WeaponData: { type: "class", detail: "class", info: "Weapon item data model" },
-              SpellData: { type: "class", detail: "class", info: "Spell item data model" },
-              EquipmentData: { type: "class", detail: "class", info: "Equipment item data model" },
-              FeatureData: { type: "class", detail: "class", info: "Feature item data model" },
-              ClassData: { type: "class", detail: "class", info: "Class item data model" },
-              BackgroundData: { type: "class", detail: "class", info: "Background item data model" },
-              ConsumableData: { type: "class", detail: "class", info: "Consumable item data model" },
-              ContainerData: { type: "class", detail: "class", info: "Container item data model" },
-              LootData: { type: "class", detail: "class", info: "Loot item data model" },
-              ToolData: { type: "class", detail: "class", info: "Tool item data model" },
-            }
-          },
-          activity: {
-            type: "property", detail: "object", info: "Activity data models",
-            children: {
-              AttackActivity: { type: "class", detail: "class", info: "Attack activity data model" },
-              DamageActivity: { type: "class", detail: "class", info: "Damage activity data model" },
-              SaveActivity: { type: "class", detail: "class", info: "Save activity data model" },
-              HealActivity: { type: "class", detail: "class", info: "Heal activity data model" },
-              UtilityActivity: { type: "class", detail: "class", info: "Utility activity data model" },
-              SummonActivity: { type: "class", detail: "class", info: "Summon activity data model" },
-              EnchantActivity: { type: "class", detail: "class", info: "Enchant activity data model" },
-            }
-          },
-        }
-      },
-      dice: {
-        type: "property", detail: "object", info: "Dice classes",
-        children: {
-          D20Roll: { type: "class", detail: "class extends Roll", info: "D20 roll with advantage/disadvantage support" },
-          DamageRoll: { type: "class", detail: "class extends Roll", info: "Damage roll with critical support" },
-          BasicRoll: { type: "class", detail: "class extends Roll", info: "Basic dice roll" },
-        }
-      },
-      utils: {
-        type: "property", detail: "object", info: "System utility functions",
-        children: {
-          simplifyBonus: { type: "function", detail: "(formula, data?) => string", info: "Simplify a roll formula using roll data" },
-          convertDistance: { type: "function", detail: "(value, from, to) => number", info: "Convert distance between unit systems" },
-          convertWeight: { type: "function", detail: "(value, from, to) => number", info: "Convert weight between unit systems" },
-        }
-      },
-      activities: {
-        type: "property", detail: "object", info: "Activity type registry",
-        children: {
-          get: { type: "method", detail: "(type) => class", info: "Get activity class by type name" },
-        }
-      },
-    }
-  },
-
-  // CONFIG children populated at runtime by injectConfigCompletions()
-  CONFIG: {
-    type: "object", detail: "object", info: "Global Foundry configuration object (populated at runtime)",
+  speaker: {
+    type: "variable", detail: "SpeakerData", info: "Chat speaker data (always available in macros via Macro#executeScript)",
     children: {}
   },
 
-  // ── dnd5e Actor/Item ──
-
-  Actor5e: {
-    type: "class", detail: "class extends Actor", info: "D&D 5e Actor document class",
-    children: {
-      create: { type: "method", detail: "(data, options?) => Promise<Actor5e>", info: "Create a new actor document" },
-      updateDocuments: { type: "method", detail: "(updates, context?) => Promise<Actor5e[]>", info: "Update multiple actors" },
-      deleteDocuments: { type: "method", detail: "(ids, context?) => Promise<Actor5e[]>", info: "Delete multiple actors" },
-    }
-  },
-
-  Item5e: {
-    type: "class", detail: "class extends Item", info: "D&D 5e Item document class",
-    children: {
-      create: { type: "method", detail: "(data, options?) => Promise<Item5e>", info: "Create a new item document" },
-      updateDocuments: { type: "method", detail: "(updates, context?) => Promise<Item5e[]>", info: "Update multiple items" },
-      deleteDocuments: { type: "method", detail: "(ids, context?) => Promise<Item5e[]>", info: "Delete multiple items" },
-    }
+  character: {
+    type: "variable", detail: "Actor | null", info: "The current user's assigned character (game.user.character)",
+    children: {}
   },
 
   token: {
-    type: "variable", detail: "Token", info: "Token instance (available in macros/hooks)",
-    children: {
-      actor: { type: "property", detail: "Actor | null", info: "The actor this token represents" },
-      document: { type: "property", detail: "TokenDocument", info: "The token document" },
-      name: { type: "property", detail: "string", info: "Token display name" },
-      x: { type: "property", detail: "number", info: "X position on canvas" },
-      y: { type: "property", detail: "number", info: "Y position on canvas" },
-      width: { type: "property", detail: "number", info: "Token width in grid units" },
-      height: { type: "property", detail: "number", info: "Token height in grid units" },
-      center: { type: "property", detail: "{ x, y }", info: "Token center point" },
-      bounds: { type: "property", detail: "PIXI.Rectangle", info: "Token bounding rectangle" },
-      visible: { type: "property", detail: "boolean", info: "Whether token is visible" },
-      controlled: { type: "property", detail: "boolean", info: "Whether token is controlled" },
-      isOwner: { type: "property", detail: "boolean", info: "Whether current user owns this token" },
-      inCombat: { type: "property", detail: "boolean", info: "Whether token is in active combat" },
-      combatant: { type: "property", detail: "Combatant | null", info: "Associated combatant if in combat" },
-      // Methods
-      control: { type: "method", detail: "(options?) => boolean", info: "Take control of the token" },
-      release: { type: "method", detail: "(options?) => boolean", info: "Release control of the token" },
-      setTarget: { type: "method", detail: "(targeted?, options?) => void", info: "Target or untarget the token" },
-      toggleEffect: { type: "method", detail: "(effect, options?) => Promise<boolean>", info: "Toggle a status effect" },
-      toggleCombat: { type: "method", detail: "() => Promise<Combatant | null>", info: "Toggle combat state" },
-    }
+    type: "variable", detail: "Token", info: "Token instance (always available in macros via Macro#executeScript)",
+    children: {}
   },
 
   actor: {
-    type: "variable", detail: "Actor", info: "Actor instance (available in macros/hooks)",
+    type: "variable", detail: "Actor", info: "Actor instance (always available in macros via Macro#executeScript)",
     children: {
-      // Base document properties
-      name: { type: "property", detail: "string", info: "Actor name" },
-      type: { type: "property", detail: "string", info: "Actor type (character, npc, vehicle, group)" },
-      img: { type: "property", detail: "string", info: "Actor image path" },
-      uuid: { type: "property", detail: "string", info: "Actor UUID" },
-      id: { type: "property", detail: "string", info: "Actor ID" },
-      statuses: { type: "property", detail: "Set<string>", info: "Active status effect IDs (prone, poisoned, etc.)" },
-      prototypeToken: { type: "property", detail: "object", info: "Default token configuration" },
-      folder: { type: "property", detail: "Folder | null", info: "Parent folder" },
-      ownership: { type: "property", detail: "object", info: "Permission levels by user ID" },
-      isOwner: { type: "property", detail: "boolean", info: "Current user is owner" },
-      limited: { type: "property", detail: "boolean", info: "Current user has limited permission" },
-      // system children populated at runtime from dnd5e schema by injectSchemaCompletions()
+      // Root document properties populated at runtime from document schema
+      // system children populated at runtime by injectSchemaCompletions()
       system: {
         type: "property", detail: "object", info: "Actor system data (populated from system schema)",
         children: {}
       },
-      items: { type: "property", detail: "Collection<Item>", info: "Actor's item collection" },
-      effects: { type: "property", detail: "Collection<ActiveEffect>", info: "Actor's active effects" },
-      classes: { type: "property", detail: "object", info: "Character's class items by identifier" },
-      // Methods
-      // dnd5e roll methods
-      rollAbilityTest: { type: "method", detail: "(abilityId, options?) => Promise<D20Roll>", info: "Roll an ability check" },
-      rollAbilitySave: { type: "method", detail: "(abilityId, options?) => Promise<D20Roll>", info: "Roll a saving throw" },
-      rollSkill: { type: "method", detail: "(skillId, options?) => Promise<D20Roll>", info: "Roll a skill check" },
-      rollDeathSave: { type: "method", detail: "(options?) => Promise<D20Roll>", info: "Roll a death saving throw" },
-      rollInitiative: { type: "method", detail: "(options?) => Promise<Combat | null>", info: "Roll initiative" },
-      shortRest: { type: "method", detail: "(options?) => Promise<RestResult>", info: "Perform a short rest" },
-      longRest: { type: "method", detail: "(options?) => Promise<RestResult>", info: "Perform a long rest" },
-      applyDamage: { type: "method", detail: "(amount, options?) => Promise<Actor>", info: "Apply damage/healing to actor" },
-      // Document methods
-      getRollData: { type: "method", detail: "() => object", info: "Get data for roll formula evaluation" },
-      getFlag: { type: "method", detail: "(scope, key) => any", info: "Get a flag value" },
-      setFlag: { type: "method", detail: "(scope, key, value) => Promise", info: "Set a flag value" },
-      unsetFlag: { type: "method", detail: "(scope, key) => Promise", info: "Remove a flag" },
-      update: { type: "method", detail: "(data, context?) => Promise<Actor>", info: "Update the actor document" },
-      delete: { type: "method", detail: "(context?) => Promise<Actor>", info: "Delete the actor document" },
-      clone: { type: "method", detail: "(data?, options?) => Actor", info: "Clone the actor" },
-      toObject: { type: "method", detail: "(source?) => object", info: "Convert to plain object" },
-      createEmbeddedDocuments: { type: "method", detail: "(type, data, context?) => Promise<Document[]>", info: "Create embedded items/effects" },
-      updateEmbeddedDocuments: { type: "method", detail: "(type, updates, context?) => Promise<Document[]>", info: "Update embedded items/effects" },
-      deleteEmbeddedDocuments: { type: "method", detail: "(type, ids, context?) => Promise<Document[]>", info: "Delete embedded items/effects" },
     }
   },
 
   item: {
-    type: "variable", detail: "Item", info: "Item instance (available in macros/hooks)",
+    type: "variable", detail: "Item", info: "Item instance (available in macros via scope)",
     children: {
-      // Base document properties
-      name: { type: "property", detail: "string", info: "Item name" },
-      type: { type: "property", detail: "string", info: "Item type (weapon, spell, feat, equipment, consumable, ...)" },
-      img: { type: "property", detail: "string", info: "Item image path" },
-      uuid: { type: "property", detail: "string", info: "Item UUID" },
-      id: { type: "property", detail: "string", info: "Item ID" },
-      isOwner: { type: "property", detail: "boolean", info: "Current user is owner" },
-      // system children populated at runtime from dnd5e schema by injectSchemaCompletions()
       system: {
         type: "property", detail: "object", info: "Item system data (populated from system schema)",
         children: {}
       },
-      activities: { type: "property", detail: "Collection<Activity>", info: "Item's activities" },
-      effects: { type: "property", detail: "Collection<ActiveEffect>", info: "Item's effects" },
-      actor: { type: "property", detail: "Actor | null", info: "Owning actor" },
-      // dnd5e item methods
-      use: { type: "method", detail: "(config?, dialog?, message?) => Promise<ChatMessage[]>", info: "Use the item" },
-      roll: { type: "method", detail: "(options?) => Promise<ChatMessage>", info: "Roll the item to chat" },
-      displayCard: { type: "method", detail: "(options?) => Promise<ChatMessage>", info: "Display item card in chat" },
-      // Document methods
-      getRollData: { type: "method", detail: "() => object", info: "Get data for roll formula evaluation" },
-      getFlag: { type: "method", detail: "(scope, key) => any", info: "Get a flag value" },
-      setFlag: { type: "method", detail: "(scope, key, value) => Promise", info: "Set a flag value" },
-      unsetFlag: { type: "method", detail: "(scope, key) => Promise", info: "Remove a flag" },
-      update: { type: "method", detail: "(data, context?) => Promise<Item>", info: "Update the item document" },
-      delete: { type: "method", detail: "(context?) => Promise<Item>", info: "Delete the item document" },
-      clone: { type: "method", detail: "(data?, options?) => Item", info: "Clone the item" },
-      toObject: { type: "method", detail: "(source?) => object", info: "Convert to plain object" },
-    }
-  },
-
-  activity: {
-    type: "variable", detail: "Activity", info: "Activity instance (available in hooks)",
-    children: {
-      type: { type: "property", detail: "string", info: "Activity type (attack, damage, save, heal, utility, summon, enchant)" },
-      name: { type: "property", detail: "string", info: "Activity name" },
-      item: { type: "property", detail: "Item", info: "Parent item" },
-      actor: { type: "property", detail: "Actor | null", info: "Owning actor" },
-      activation: {
-        type: "property", detail: "object", info: "Activation configuration",
-        children: {
-          type: { type: "property", detail: "string", info: "Activation type (action, bonus, reaction, ...)" },
-          cost: { type: "property", detail: "number", info: "Activation cost" },
-          condition: { type: "property", detail: "string", info: "Activation condition" },
-        }
-      },
-      consumption: {
-        type: "property", detail: "object", info: "Resource consumption configuration",
-        children: {
-          targets: { type: "property", detail: "array", info: "Consumption targets" },
-          scaling: { type: "property", detail: "object", info: "Consumption scaling" },
-        }
-      },
-      duration: {
-        type: "property", detail: "object", info: "Effect duration",
-        children: {
-          value: { type: "property", detail: "number", info: "Duration value" },
-          units: { type: "property", detail: "string", info: "Duration units" },
-          concentration: { type: "property", detail: "boolean", info: "Requires concentration" },
-        }
-      },
-      range: {
-        type: "property", detail: "object", info: "Range configuration",
-        children: {
-          value: { type: "property", detail: "number", info: "Range value" },
-          units: { type: "property", detail: "string", info: "Range units" },
-          special: { type: "property", detail: "string", info: "Special range notes" },
-        }
-      },
-      target: {
-        type: "property", detail: "object", info: "Targeting configuration",
-        children: {
-          template: { type: "property", detail: "object", info: "Template configuration { type, size, units }" },
-          affects: { type: "property", detail: "object", info: "What the activity affects { type, count, ... }" },
-          prompt: { type: "property", detail: "boolean", info: "Prompt for targets" },
-        }
-      },
-      damage: {
-        type: "property", detail: "object", info: "Damage configuration (AttackActivity, DamageActivity)",
-        children: {
-          parts: { type: "property", detail: "array", info: "Damage parts [{ formula, types, scaling }]" },
-          critical: { type: "property", detail: "object", info: "Critical hit configuration" },
-        }
-      },
-      save: {
-        type: "property", detail: "object", info: "Save configuration (SaveActivity)",
-        children: {
-          ability: { type: "property", detail: "string", info: "Save ability" },
-          dc: { type: "property", detail: "object", info: "DC configuration { calculation, formula }" },
-        }
-      },
-      attack: {
-        type: "property", detail: "object", info: "Attack configuration (AttackActivity)",
-        children: {
-          ability: { type: "property", detail: "string", info: "Attack ability" },
-          bonus: { type: "property", detail: "string", info: "Attack bonus formula" },
-          type: { type: "property", detail: "object", info: "Attack type { value, classification }" },
-          flat: { type: "property", detail: "boolean", info: "Flat attack (no ability mod)" },
-        }
-      },
-      healing: {
-        type: "property", detail: "object", info: "Healing configuration (HealActivity)",
-        children: {
-          formula: { type: "property", detail: "string", info: "Healing formula" },
-          types: { type: "property", detail: "Set<string>", info: "Healing types" },
-          scaling: { type: "property", detail: "object", info: "Scaling configuration" },
-        }
-      },
-      effects: { type: "property", detail: "array", info: "Effects applied by this activity" },
-      uses: {
-        type: "property", detail: "object", info: "Activity uses (separate from item uses)",
-        children: {
-          value: { type: "property", detail: "number", info: "Current uses" },
-          max: { type: "property", detail: "string", info: "Maximum uses" },
-          recovery: { type: "property", detail: "array", info: "Recovery configuration" },
-        }
-      },
-      // Methods
-      use: { type: "method", detail: "(usage?, dialog?, message?) => Promise<ChatMessage[]>", info: "Use this activity" },
-      rollAttack: { type: "method", detail: "(config?, dialog?, message?) => Promise<D20Roll[]>", info: "Roll attack (AttackActivity)" },
-      rollDamage: { type: "method", detail: "(config?, dialog?, message?) => Promise<DamageRoll[]>", info: "Roll damage" },
-      getRollData: { type: "method", detail: "() => object", info: "Get data for roll formula evaluation" },
-      getFlag: { type: "method", detail: "(scope, key) => any", info: "Get a flag value" },
-      setFlag: { type: "method", detail: "(scope, key, value) => Promise", info: "Set a flag value" },
-      unsetFlag: { type: "method", detail: "(scope, key) => Promise", info: "Remove a flag" },
     }
   },
 
@@ -615,17 +102,18 @@ let COMPLETION_TREE: CompletionNode = {
   },
 
   scope: {
-    type: "variable", detail: "object", info: "Macro scope object",
-    children: {
-      actor: { type: "property", detail: "Actor", info: "The actor using the item" },
-      token: { type: "property", detail: "Token", info: "The token using the item" },
-      item: { type: "property", detail: "Item", info: "The item being used" },
-      activity: { type: "property", detail: "Activity", info: "The activity being used" },
-    }
+    type: "variable", detail: "object", info: "Macro scope object (additional named params spread from scope are also available as top-level variables)",
+    children: {}
+  },
+
+  // CONFIG children populated at runtime by injectConfigCompletions()
+  CONFIG: {
+    type: "object", detail: "object", info: "Global Foundry configuration object (populated at runtime)",
+    children: {}
   },
 };
 
-// ── Schema walking for dnd5e DataModels ──
+// ── Schema walking for system DataModels ──
 
 /**
  * Convert a Foundry DataField to a completion node.
@@ -766,63 +254,190 @@ function mergeCompletions(target: { children?: CompletionNode }, additions: Comp
     target.children = {};
   }
   for (const [key, value] of Object.entries(additions)) {
-    // Don't overwrite existing entries (hardcoded takes precedence)
     if (!(key in target.children)) {
+      // New entry — add it
       target.children[key] = value;
-    } else if (value.children && target.children[key]) {
+    } else {
+      const existing = target.children[key];
+      // Enrich existing entry if the addition has better type info
+      if (value.detail && existing.detail) {
+        const existingIsWeak = existing.detail === "any" || existing.detail === "object"
+          || existing.detail === "Promise<any>" || existing.detail === "any | null";
+        const additionIsStrong = value.detail !== "any" && value.detail !== "object"
+          && value.detail !== "Promise<any>" && value.detail !== "any | null";
+        if (existingIsWeak && additionIsStrong) {
+          existing.detail = value.detail;
+        }
+      }
+      // Copy info if the existing entry lacks it
+      if (value.info && !existing.info) {
+        existing.info = value.info;
+      }
+      // Copy constructorDetail if the existing entry lacks it
+      if (value.constructorDetail && !existing.constructorDetail) {
+        existing.constructorDetail = value.constructorDetail;
+      }
+      // Copy returnType if the existing entry lacks it
+      if (value.returnType && !existing.returnType) {
+        existing.returnType = value.returnType;
+      }
       // Recursively merge children
-      mergeCompletions(target.children[key], value.children);
+      if (value.children) {
+        mergeCompletions(existing, value.children);
+      }
     }
   }
 }
 
 /**
- * Inject schema-generated completions for dnd5e actors and items.
- * Called at runtime when dnd5e is available.
+ * Inject schema-generated completions for system actors and items.
+ * Uses CONFIG.Actor.dataModels and CONFIG.Item.dataModels which are
+ * generic Foundry structures (Record<string, TypeDataModel>) populated
+ * by whichever game system is active. Works with dnd5e, pf2e, etc.
  */
 let _schemaInjected = false;
 function injectSchemaCompletions(): void {
   if (_schemaInjected) return;
 
-  const dnd5e = (globalThis as any).dnd5e;
-  if (!dnd5e?.dataModels) {
-    console.log("macro-autocomplete | dnd5e.dataModels not available, skipping schema injection");
+  const cfg = (globalThis as any).CONFIG;
+  if (!cfg) {
+    console.log("macro-autocomplete | CONFIG not available, skipping schema injection");
     return;
   }
 
-  console.log("macro-autocomplete | Injecting schema-generated completions for Actor and Item");
+  const initStart = performance.now();
+  console.log("macro-autocomplete | Injecting schema-generated completions from system DataModels");
 
   try {
-    // Get actor schemas - merge CharacterData and NPCData for comprehensive coverage
-    const actorSchemas = [
-      dnd5e.dataModels.actor?.CharacterData,
-      dnd5e.dataModels.actor?.NPCData,
-    ].filter(Boolean);
-
-    if (actorSchemas.length > 0 && COMPLETION_TREE.actor?.children?.system) {
-      for (const DataModel of actorSchemas) {
+    // Walk CONFIG.Actor.dataModels - merges all actor type schemas for comprehensive coverage
+    const actorDataModels = cfg.Actor?.dataModels;
+    if (actorDataModels && typeof actorDataModels === "object" && COMPLETION_TREE.actor?.children?.system) {
+      let count = 0;
+      for (const [typeName, DataModel] of Object.entries(actorDataModels) as [string, any][]) {
         if (DataModel?.schema) {
           const schemaCompletions = schemaToCompletions(DataModel.schema);
           mergeCompletions(COMPLETION_TREE.actor.children.system, schemaCompletions);
+          // Also populate character.system (character is also an Actor)
+          if (COMPLETION_TREE.character?.children?.system) {
+            mergeCompletions(COMPLETION_TREE.character.children.system, schemaCompletions);
+          }
+          count++;
         }
       }
-      console.log("macro-autocomplete | Injected actor system schema completions");
+      if (count > 0) {
+        console.log(`macro-autocomplete | Injected actor system schema completions (${count} types)`);
+      }
     }
 
-    // Get item schemas - merge all item types for comprehensive coverage
-    const itemDataModels = dnd5e.dataModels.item;
-    if (itemDataModels && COMPLETION_TREE.item?.children?.system) {
-      const itemSchemas = Object.values(itemDataModels).filter((dm: any) => dm?.schema);
-      for (const DataModel of itemSchemas as any[]) {
-        const schemaCompletions = schemaToCompletions(DataModel.schema);
-        mergeCompletions(COMPLETION_TREE.item.children.system, schemaCompletions);
+    // Walk CONFIG.Item.dataModels - merges all item type schemas
+    const itemDataModels = cfg.Item?.dataModels;
+    if (itemDataModels && typeof itemDataModels === "object" && COMPLETION_TREE.item?.children?.system) {
+      let count = 0;
+      for (const [typeName, DataModel] of Object.entries(itemDataModels) as [string, any][]) {
+        if (DataModel?.schema) {
+          const schemaCompletions = schemaToCompletions(DataModel.schema);
+          mergeCompletions(COMPLETION_TREE.item.children.system, schemaCompletions);
+          count++;
+        }
       }
-      console.log("macro-autocomplete | Injected item system schema completions");
+      if (count > 0) {
+        console.log(`macro-autocomplete | Injected item system schema completions (${count} types)`);
+      }
+    }
+
+    // Walk base document schemas for root-level properties (name, img, type, items, effects, etc.)
+    // These are distinct from system-specific dataModel schemas which only populate actor.system/item.system
+    const documentSchemaTargets: Array<{ configKey: string; treeKeys: string[]; label: string }> = [
+      { configKey: "Actor", treeKeys: ["actor", "character"], label: "Actor" },
+      { configKey: "Item", treeKeys: ["item"], label: "Item" },
+    ];
+
+    for (const { configKey, treeKeys, label } of documentSchemaTargets) {
+      try {
+        const docClass = cfg[configKey]?.documentClass;
+        const schema = docClass?.schema;
+        if (!schema) continue;
+
+        const rootCompletions = schemaToCompletions(schema);
+        // Remove "system" from root completions — it's already populated more comprehensively
+        // from the individual dataModel schemas above
+        delete rootCompletions.system;
+
+        if (Object.keys(rootCompletions).length > 0) {
+          for (const treeKey of treeKeys) {
+            const target = COMPLETION_TREE[treeKey];
+            if (target) {
+              mergeCompletions(target, rootCompletions);
+            }
+          }
+          console.log(`macro-autocomplete | Injected ${Object.keys(rootCompletions).length} root document properties for ${label}`);
+        }
+      } catch (err) {
+        console.warn(`macro-autocomplete | Error walking ${label} document schema:`, err);
+      }
+    }
+
+    // Supplement schema completions with runtime-derived properties.
+    // Many systems compute properties during prepareDerivedData() that aren't in schemas
+    // (e.g., actor.system.attributes.ac.value, .base, .shield, .bonus).
+    // Construct temporary in-memory documents for each type — this triggers prepareData()
+    // which populates derived properties without needing actual world instances.
+    try {
+      const ActorCls = cfg.Actor?.documentClass;
+      if (ActorCls && actorDataModels && COMPLETION_TREE.actor?.children?.system) {
+        let count = 0;
+        for (const typeName of Object.keys(actorDataModels)) {
+          try {
+            const temp = new ActorCls({ name: "_mac_tmp", type: typeName });
+            if (temp.system) {
+              const runtimeCompletions = objectToCompletions(temp.system, 4);
+              mergeCompletions(COMPLETION_TREE.actor.children.system, runtimeCompletions);
+              if (COMPLETION_TREE.character?.children?.system) {
+                mergeCompletions(COMPLETION_TREE.character.children.system, runtimeCompletions);
+              }
+              count++;
+            }
+          } catch { /* some types may fail without required data */ }
+        }
+        if (count > 0) {
+          console.log(`macro-autocomplete | Supplemented actor.system with derived data (${count} types)`);
+        }
+      }
+
+      const ItemCls = cfg.Item?.documentClass;
+      if (ItemCls && itemDataModels && COMPLETION_TREE.item?.children?.system) {
+        let count = 0;
+        for (const typeName of Object.keys(itemDataModels)) {
+          try {
+            const temp = new ItemCls({ name: "_mac_tmp", type: typeName });
+            if (temp.system) {
+              mergeCompletions(COMPLETION_TREE.item.children.system, objectToCompletions(temp.system, 4));
+              count++;
+            }
+          } catch { /* some types may fail without required data */ }
+        }
+        if (count > 0) {
+          console.log(`macro-autocomplete | Supplemented item.system with derived data (${count} types)`);
+        }
+      }
+    } catch (err) {
+      console.warn("macro-autocomplete | Error supplementing schema with derived data:", err);
     }
 
     _schemaInjected = true;
 
-    // Also inject fvtt-types generated completions
+    // Walk globals at runtime: foundry.utils, game, canvas, ui, Hooks, CONST, etc.
+    // These discover methods/properties with generic "any" types.
+    injectGlobalCompletions();
+
+    // Walk foundry namespaces (documents, applications) for class entries
+    injectFoundryNamespaceCompletions();
+
+    // Inject instance methods from runtime class prototypes (system-specific)
+    injectPrototypeCompletions();
+
+    // Enrich with fvtt-types generated completions (build-time typed data).
+    // Runs after runtime discovery so it can upgrade "any" types to proper types.
     injectFoundryCompletions();
 
     // Inject CONFIG completions from runtime
@@ -831,8 +446,28 @@ function injectSchemaCompletions(): void {
     // Rebuild signature map with new completions
     rebuildSignatureMap();
 
+    // Build the public API object
+    const api = {
+      tree: COMPLETION_TREE,
+      rebuildSignatureMap,
+      schemaToCompletions,
+      mergeCompletions,
+      classToCompletions,
+      objectToCompletions,
+      valueToCompletionEntry,
+      fieldToCompletionNode,
+    };
+
+    // Expose as module API (game.modules.get("macro-autocomplete").api)
+    const mod = (game as any).modules?.get("macro-autocomplete");
+    if (mod) mod.api = api;
+
     // Fire ready hook so other modules can inject their completions
-    (Hooks as any).callAll("macro-autocomplete.ready", { tree: COMPLETION_TREE, rebuildSignatureMap });
+    (Hooks as any).callAll("macro-autocomplete.ready", api);
+
+    const elapsed = (performance.now() - initStart).toFixed(1);
+
+    console.log(`macro-autocomplete | Initialization complete in ${elapsed}ms`);
 
   } catch (err) {
     console.error("macro-autocomplete | Error injecting schema completions:", err);
@@ -842,6 +477,12 @@ function injectSchemaCompletions(): void {
 /**
  * Inject completions generated from fvtt-types at build time.
  * These provide Foundry core types like Actor, Item, Roll, Dialog, Hooks, etc.
+ *
+ * The generated JSON separates static vs instance members:
+ * - staticChildren: methods/properties on the class itself (e.g., Actor.create)
+ * - instanceChildren: methods/properties on instances (e.g., actor.update)
+ * - instancePath: if set, where to route instance members (e.g., "actor" for Actor)
+ * - constructorDetail: constructor signature for `new ClassName()` hints
  */
 function injectFoundryCompletions(): void {
   if (!foundryCompletions || typeof foundryCompletions !== "object") {
@@ -851,26 +492,329 @@ function injectFoundryCompletions(): void {
 
   console.log("macro-autocomplete | Injecting fvtt-types generated completions");
 
+  // Map class names to tree paths where their instance members should be merged.
+  // This routes typed instance members from the JSON to the runtime globals.
+  // Entries with dots navigate into nested tree paths (e.g., "game.settings").
+  const instanceTargets: Record<string, string[]> = {
+    Canvas: ["canvas"],
+    Game: ["game"],
+    ClientSettings: ["game.settings"],
+    Localization: ["game.i18n"],
+    Notifications: ["ui.notifications"],
+    Actor: ["actor", "character"],
+    Item: ["item"],
+    Token: ["token"],
+  };
+
   try {
-    // Merge each type from foundryCompletions into COMPLETION_TREE
     for (const [typeName, typeEntry] of Object.entries(foundryCompletions)) {
-      const entry = typeEntry as { type?: string; detail?: string; info?: string; children?: CompletionNode };
+      const entry = typeEntry as {
+        type?: string; detail?: string; info?: string;
+        staticChildren?: CompletionNode; instanceChildren?: CompletionNode;
+        children?: CompletionNode; // legacy format fallback
+        instancePath?: string;
+        constructorDetail?: string;
+      };
 
-      // Skip if no children (empty types like Game with 0 members)
-      if (!entry.children || Object.keys(entry.children).length === 0) continue;
+      const staticChildren = entry.staticChildren || {};
+      const instanceChildren = entry.instanceChildren || {};
+      // Legacy format: if only "children" exists, treat all as static (class-level)
+      const legacyChildren = entry.children || {};
+      const hasNewFormat = entry.staticChildren || entry.instanceChildren;
 
-      if (COMPLETION_TREE[typeName]) {
-        // Merge into existing entry
-        mergeCompletions(COMPLETION_TREE[typeName], entry.children);
-      } else {
-        // Add as new entry
-        COMPLETION_TREE[typeName] = entry as any;
+      // Merge static members into the class entry's staticChildren (e.g., Actor.create)
+      const classMembers = hasNewFormat ? staticChildren : legacyChildren;
+      if (Object.keys(classMembers).length > 0) {
+        if (!COMPLETION_TREE[typeName]) {
+          COMPLETION_TREE[typeName] = { type: entry.type || "class", detail: entry.detail || typeName };
+        }
+        if (!COMPLETION_TREE[typeName].staticChildren) {
+          COMPLETION_TREE[typeName].staticChildren = {};
+        }
+        mergeCompletions({ children: COMPLETION_TREE[typeName].staticChildren }, classMembers);
+      }
+
+      // Apply constructor detail to the class entry
+      if (entry.constructorDetail) {
+        if (!COMPLETION_TREE[typeName]) {
+          COMPLETION_TREE[typeName] = { type: entry.type || "class", detail: entry.detail || typeName };
+        }
+        COMPLETION_TREE[typeName].constructorDetail = entry.constructorDetail;
+      }
+
+      // Store instance members on the class entry for type inference (e.g., r = new Roll() → r.xxx)
+      if (Object.keys(instanceChildren).length > 0) {
+        if (!COMPLETION_TREE[typeName]) {
+          COMPLETION_TREE[typeName] = { type: entry.type || "class", detail: entry.detail || typeName };
+        }
+        if (!COMPLETION_TREE[typeName].instanceChildren) {
+          COMPLETION_TREE[typeName].instanceChildren = {};
+        }
+        mergeCompletions({ children: COMPLETION_TREE[typeName].instanceChildren }, instanceChildren);
+      }
+
+      // Merge instance members into known runtime globals
+      if (Object.keys(instanceChildren).length > 0) {
+        // Collect all target paths for this type
+        const targets: string[] = [];
+        // From the JSON's own instancePath field
+        if (entry.instancePath) targets.push(entry.instancePath);
+        // From our mapping table
+        if (instanceTargets[typeName]) {
+          for (const t of instanceTargets[typeName]) {
+            if (!targets.includes(t)) targets.push(t);
+          }
+        }
+
+        for (const targetPath of targets) {
+          // Navigate dotted paths (e.g. "game.settings")
+          const parts = targetPath.split(".");
+          let node: CompletionEntry | undefined = COMPLETION_TREE[parts[0]];
+          for (let i = 1; i < parts.length && node; i++) {
+            node = node.children?.[parts[i]];
+          }
+          if (node) {
+            if (!node.instanceChildren) node.instanceChildren = {};
+            mergeCompletions({ children: node.instanceChildren }, instanceChildren);
+          }
+        }
       }
     }
 
     console.log(`macro-autocomplete | Merged ${Object.keys(foundryCompletions).length} foundry type completions`);
   } catch (err) {
     console.error("macro-autocomplete | Error injecting foundry completions:", err);
+  }
+}
+
+/**
+ * Result of walking a class for both static and instance members.
+ */
+interface ClassCompletions {
+  staticChildren: CompletionNode;
+  instanceChildren: CompletionNode;
+  constructorDetail?: string;
+}
+
+/**
+ * Walk a class and extract both static members (on the constructor chain)
+ * and instance members (on the prototype chain) as completions.
+ *
+ * Replaces the old separate `prototypeToCompletions` and `classStaticsToCompletions` functions.
+ *
+ * Static chain: cls → parent → ... → stop at Function.prototype/Object
+ * Instance chain: cls.prototype → parent prototype → ... → stop at Object.prototype
+ */
+function classToCompletions(cls: any): ClassCompletions {
+  const result: ClassCompletions = {
+    staticChildren: {},
+    instanceChildren: {},
+  };
+
+  if (!cls || typeof cls !== "function") return result;
+
+  const staticSkipNames = new Set([
+    "name", "length", "prototype", "caller", "arguments",
+    "toString", "valueOf", "hasOwnProperty", "isPrototypeOf",
+    "propertyIsEnumerable", "toLocaleString", "constructor",
+  ]);
+
+  const instanceSkipNames = new Set([
+    "constructor", "toString", "valueOf", "toJSON", "toLocaleString",
+    "hasOwnProperty", "isPrototypeOf", "propertyIsEnumerable",
+    "then", "catch", "finally",
+  ]);
+
+  /** Extract a completion entry from a property descriptor, or null to skip. */
+  function extractMember(descriptor: PropertyDescriptor): CompletionEntry | null {
+    if (typeof descriptor.value === "function") {
+      const fn = descriptor.value;
+      const fnStr = fn.toString();
+      const match = fnStr.match(/^(?:async\s+)?(?:function\s*\w*\s*)?(\([^)]*\))|^(?:async\s+)?(\([^)]*\))\s*=>|^(?:async\s+)?\w+\s*(\([^)]*\))/);
+      const params = match ? (match[1] || match[2] || match[3] || "()") : "()";
+      const isAsync = fnStr.trimStart().startsWith("async");
+      const returnHint = isAsync ? "Promise<any>" : "any";
+      return { type: "method", detail: `${params} => ${returnHint}` };
+    } else if (descriptor.get && !descriptor.set) {
+      // Read-only getter — treat as a property
+      return { type: "property", detail: "any" };
+    } else if (descriptor.get && descriptor.set) {
+      // Getter+setter pair (likely libWrapper interception) — skip to find real definition deeper
+      return null;
+    }
+    return null;
+  }
+
+  // Walk static members on the class chain
+  let current = cls;
+  while (current && current !== Function.prototype && current !== Object) {
+    for (const name of Object.getOwnPropertyNames(current)) {
+      if (name.startsWith("_") || name.startsWith("#")) continue;
+      if (staticSkipNames.has(name)) continue;
+      if (result.staticChildren[name]) continue; // already found on a more specific class
+
+      try {
+        const descriptor = Object.getOwnPropertyDescriptor(current, name);
+        if (!descriptor) continue;
+        const entry = extractMember(descriptor);
+        if (entry) result.staticChildren[name] = entry;
+      } catch { /* skip inaccessible properties */ }
+    }
+    current = Object.getPrototypeOf(current);
+  }
+
+  // Walk instance members on the prototype chain
+  if (cls.prototype) {
+    let proto = cls.prototype;
+    while (proto && proto !== Object.prototype) {
+      for (const name of Object.getOwnPropertyNames(proto)) {
+        if (name.startsWith("_") || name.startsWith("#")) continue;
+        if (instanceSkipNames.has(name)) continue;
+        if (result.instanceChildren[name]) continue; // already found on a more specific prototype
+
+        try {
+          const descriptor = Object.getOwnPropertyDescriptor(proto, name);
+          if (!descriptor) continue;
+          const entry = extractMember(descriptor);
+          if (entry) result.instanceChildren[name] = entry;
+        } catch { /* skip properties that throw on access */ }
+      }
+      proto = Object.getPrototypeOf(proto);
+    }
+  }
+
+  // Extract constructor detail
+  try {
+    const ctorStr = cls.toString();
+    const ctorMatch = ctorStr.match(/constructor\s*\(([^)]*)\)/);
+    if (ctorMatch) {
+      result.constructorDetail = `(${ctorMatch[1].trim()}) => ${cls.name || "object"}`;
+    }
+  } catch { /* ignore */ }
+
+  return result;
+}
+
+/**
+ * Inject instance methods from runtime class prototypes into macro variable entries.
+ * This dynamically discovers methods from the current system's document classes
+ * (e.g., dnd5e's Actor5e, Item5e) so completions are always accurate.
+ *
+ * Uses classToCompletions() to get both static and instance members in one call.
+ * Instance members go into variable entries' instanceChildren (e.g., actor.instanceChildren).
+ * Both static and instance members are stored on class entries (e.g., Actor.staticChildren, Actor.instanceChildren).
+ *
+ * Also populates plain-data entries (like speaker) from runtime samples.
+ */
+function injectPrototypeCompletions(): void {
+  const cfg = (globalThis as any).CONFIG;
+  if (!cfg) return;
+
+  // Unified class config — each entry can target variable entries and/or a class entry
+  const classConfig: Array<{
+    configPath: string;
+    variableKeys?: string[];  // tree keys for variable entries (get instanceChildren)
+    classKey?: string;        // tree key for class entry (gets static + instance)
+    label: string;
+  }> = [
+    { configPath: "Actor.documentClass", variableKeys: ["actor", "character"], classKey: "Actor", label: "Actor" },
+    { configPath: "Item.documentClass", variableKeys: ["item"], classKey: "Item", label: "Item" },
+    { configPath: "Token.objectClass", variableKeys: ["token"], classKey: "Token", label: "Token" },
+    { configPath: "ChatMessage.documentClass", classKey: "ChatMessage", label: "ChatMessage" },
+    { configPath: "ActiveEffect.documentClass", classKey: "ActiveEffect", label: "ActiveEffect" },
+    { configPath: "Scene.documentClass", classKey: "Scene", label: "Scene" },
+    { configPath: "Combat.documentClass", classKey: "Combat", label: "Combat" },
+    { configPath: "Combatant.documentClass", classKey: "Combatant", label: "Combatant" },
+    { configPath: "User.documentClass", classKey: "User", label: "User" },
+    { configPath: "Folder.documentClass", classKey: "Folder", label: "Folder" },
+    { configPath: "TokenDocument.documentClass", classKey: "TokenDocument", label: "TokenDocument" },
+  ];
+
+  for (const { configPath, variableKeys, classKey, label } of classConfig) {
+    try {
+      const parts = configPath.split(".");
+      let cls: any = cfg;
+      for (const p of parts) cls = cls?.[p];
+      if (!cls?.prototype) continue;
+
+      const walked = classToCompletions(cls);
+
+      // Store instance members on variable entries (e.g., actor, token)
+      if (variableKeys) {
+        for (const treeKey of variableKeys) {
+          const target = COMPLETION_TREE[treeKey];
+          if (!target) continue;
+          if (!target.instanceChildren) target.instanceChildren = {};
+          mergeCompletions({ children: target.instanceChildren }, walked.instanceChildren);
+          console.log(`macro-autocomplete | Injected ${Object.keys(walked.instanceChildren).length} instance members for ${label} → ${treeKey}`);
+        }
+      }
+
+      // Store on class entry
+      if (classKey) {
+        const classEntry = COMPLETION_TREE[classKey];
+        if (!classEntry) continue;
+        if (Object.keys(walked.instanceChildren).length > 0) {
+          if (!classEntry.instanceChildren) classEntry.instanceChildren = {};
+          mergeCompletions({ children: classEntry.instanceChildren }, walked.instanceChildren);
+        }
+        if (Object.keys(walked.staticChildren).length > 0) {
+          if (!classEntry.staticChildren) classEntry.staticChildren = {};
+          mergeCompletions({ children: classEntry.staticChildren }, walked.staticChildren);
+        }
+        if (walked.constructorDetail && !classEntry.constructorDetail) {
+          classEntry.constructorDetail = walked.constructorDetail;
+        }
+      }
+    } catch (err) {
+      console.warn(`macro-autocomplete | Error injecting prototype completions for ${label}:`, err);
+    }
+  }
+
+  // Global classes not in CONFIG (Roll, Dialog, DialogV2)
+  const g = globalThis as any;
+  for (const className of ["Roll", "Dialog", "DialogV2"]) {
+    try {
+      const cls = g[className];
+      if (!cls?.prototype) continue;
+      if (!COMPLETION_TREE[className]) continue;
+
+      const walked = classToCompletions(cls);
+      const classEntry = COMPLETION_TREE[className];
+      if (Object.keys(walked.instanceChildren).length > 0) {
+        if (!classEntry.instanceChildren) classEntry.instanceChildren = {};
+        mergeCompletions({ children: classEntry.instanceChildren }, walked.instanceChildren);
+      }
+      if (Object.keys(walked.staticChildren).length > 0) {
+        if (!classEntry.staticChildren) classEntry.staticChildren = {};
+        mergeCompletions({ children: classEntry.staticChildren }, walked.staticChildren);
+      }
+      if (walked.constructorDetail && !classEntry.constructorDetail) {
+        classEntry.constructorDetail = walked.constructorDetail;
+      }
+    } catch { /* skip */ }
+  }
+
+  // Speaker — plain data object, introspect from a runtime sample
+  try {
+    const ChatMsg = cfg.ChatMessage?.documentClass;
+    if (ChatMsg?.getSpeaker) {
+      const sample = ChatMsg.getSpeaker();
+      if (sample && typeof sample === "object") {
+        const speakerTarget = COMPLETION_TREE.speaker;
+        if (speakerTarget) {
+          if (!speakerTarget.children) speakerTarget.children = {};
+          for (const [key, value] of Object.entries(sample)) {
+            if (key.startsWith("_")) continue;
+            const entry = valueToCompletionEntry(value, 0);
+            if (entry) speakerTarget.children[key] = entry;
+          }
+          console.log(`macro-autocomplete | Injected ${Object.keys(speakerTarget.children).length} speaker fields from ChatMessage.getSpeaker()`);
+        }
+      }
+    }
+  } catch (err) {
+    console.warn("macro-autocomplete | Error injecting speaker completions:", err);
   }
 }
 
@@ -884,7 +828,18 @@ function valueToCompletionEntry(value: any, maxDepth: number = 3): CompletionEnt
   const type = typeof value;
 
   if (type === "function") {
-    // Try to extract parameter info from function
+    // Check if it's a class constructor (has prototype and PascalCase name)
+    if (value.prototype && value.name && /^[A-Z]/.test(value.name)) {
+      const entry: CompletionEntry = { type: "class", detail: `class ${value.name}`, info: value.name };
+      if (maxDepth > 0) {
+        const walked = classToCompletions(value);
+        if (Object.keys(walked.staticChildren).length > 0) entry.staticChildren = walked.staticChildren;
+        if (Object.keys(walked.instanceChildren).length > 0) entry.instanceChildren = walked.instanceChildren;
+        if (walked.constructorDetail) entry.constructorDetail = walked.constructorDetail;
+      }
+      return entry;
+    }
+    // Regular function
     const fnStr = value.toString();
     const match = fnStr.match(/^(?:function\s*\w*\s*)?(\([^)]*\))|^(\([^)]*\))\s*=>/);
     const params = match ? (match[1] || match[2]) : "()";
@@ -896,11 +851,6 @@ function valueToCompletionEntry(value: any, maxDepth: number = 3): CompletionEnt
   }
 
   if (type === "object") {
-    // Check if it's a class/constructor
-    if (value.prototype && value.name) {
-      return { type: "class", detail: `class ${value.name}`, info: value.name };
-    }
-
     // Regular object - recurse if depth allows
     const entry: CompletionEntry = { type: "property", detail: "object" };
 
@@ -949,6 +899,40 @@ function valueToCompletionEntry(value: any, maxDepth: number = 3): CompletionEnt
 }
 
 /**
+ * Recursively walk a completion subtree and register any class entries at the
+ * top level of COMPLETION_TREE so they can be resolved by type name.
+ * e.g., CONFIG.Dice.D20Roll → COMPLETION_TREE["D20Roll"]
+ * Skips entries that already exist at the top level (runtime/namespace walkers take priority).
+ */
+function registerClassesFromNode(entry: CompletionEntry): void {
+  const walkNode = (node: CompletionNode) => {
+    for (const [key, child] of Object.entries(node)) {
+      if (child.type === "class" && /^[A-Z]/.test(key)) {
+        if (!COMPLETION_TREE[key]) {
+          COMPLETION_TREE[key] = child;
+        } else {
+          // Merge in any new static/instance members
+          if (child.staticChildren) {
+            if (!COMPLETION_TREE[key].staticChildren) COMPLETION_TREE[key].staticChildren = {};
+            mergeCompletions({ children: COMPLETION_TREE[key].staticChildren }, child.staticChildren);
+          }
+          if (child.instanceChildren) {
+            if (!COMPLETION_TREE[key].instanceChildren) COMPLETION_TREE[key].instanceChildren = {};
+            mergeCompletions({ children: COMPLETION_TREE[key].instanceChildren }, child.instanceChildren);
+          }
+          if (child.constructorDetail && !COMPLETION_TREE[key].constructorDetail) {
+            COMPLETION_TREE[key].constructorDetail = child.constructorDetail;
+          }
+        }
+      }
+      // Recurse into children
+      if (child.children) walkNode(child.children);
+    }
+  };
+  if (entry.children) walkNode(entry.children);
+}
+
+/**
  * Inject completions from the global CONFIG object at runtime.
  * This dynamically populates CONFIG.DND5E and other CONFIG entries.
  */
@@ -986,10 +970,372 @@ function injectConfigCompletions(): void {
       }
     }
 
+    // Register classes found within CONFIG as top-level tree entries
+    // so they can be resolved by type name (e.g., D20Roll from CONFIG.Dice.D20Roll)
+    registerClassesFromNode(COMPLETION_TREE.CONFIG);
+
     console.log(`macro-autocomplete | Injected ${count} CONFIG entries`);
   } catch (err) {
     console.error("macro-autocomplete | Error injecting config completions:", err);
   }
+}
+
+/**
+ * Walk a runtime object and extract its properties, methods, and getters as completions.
+ * Handles both own properties (data values) and prototype members (methods/getters).
+ * For sub-objects, recurses up to maxDepth. Classes get their statics extracted.
+ */
+function objectToCompletions(obj: any, maxDepth: number = 2): CompletionNode {
+  const children: CompletionNode = {};
+  if (!obj || typeof obj !== "object") return children;
+
+  const skipNames = new Set([
+    "constructor", "toString", "valueOf", "toJSON", "toLocaleString",
+    "hasOwnProperty", "isPrototypeOf", "propertyIsEnumerable",
+    "then", "catch", "finally",
+  ]);
+
+  const maxChildren = 200;
+  let count = 0;
+
+  // First: walk own enumerable properties (data values)
+  for (const key of Object.keys(obj)) {
+    if (count >= maxChildren) break;
+    if (key.startsWith("_") || key.startsWith("#")) continue;
+    if (skipNames.has(key)) continue;
+    if (children[key]) continue;
+
+    try {
+      const value = obj[key];
+      if (value === null || value === undefined) {
+        // Property exists on the object but has no value (e.g., equippedArmor on a
+        // temporary actor with no armor). Still register so it appears in completions.
+        children[key] = { type: "property", detail: "any" };
+        count++;
+        continue;
+      }
+      const vType = typeof value;
+
+      if (vType === "function") {
+        // Check if it's a class constructor
+        if (value.prototype && /^[A-Z]/.test(key)) {
+          const entry: CompletionEntry = { type: "class", detail: `class ${key}`, info: key };
+          if (maxDepth > 0) {
+            const walked = classToCompletions(value);
+            if (Object.keys(walked.staticChildren).length > 0) entry.staticChildren = walked.staticChildren;
+            if (Object.keys(walked.instanceChildren).length > 0) entry.instanceChildren = walked.instanceChildren;
+            if (walked.constructorDetail) entry.constructorDetail = walked.constructorDetail;
+          }
+          children[key] = entry;
+        } else {
+          // Regular function
+          const fnStr = value.toString();
+          const match = fnStr.match(/^(?:async\s+)?(?:function\s*\w*\s*)?(\([^)]*\))|^(?:async\s+)?(\([^)]*\))\s*=>|^(?:async\s+)?\w+\s*(\([^)]*\))/);
+          const params = match ? (match[1] || match[2] || match[3] || "()") : "()";
+          const isAsync = fnStr.trimStart().startsWith("async");
+          const returnHint = isAsync ? "Promise<any>" : "any";
+          children[key] = { type: "function", detail: `${params} => ${returnHint}` };
+        }
+      } else if (vType === "object") {
+        if (Array.isArray(value)) {
+          children[key] = { type: "property", detail: `array[${value.length}]` };
+        } else if (maxDepth > 0) {
+          const subChildren = objectToCompletions(value, maxDepth - 1);
+          const entry: CompletionEntry = {
+            type: "property",
+            detail: value.constructor?.name || "object",
+          };
+          if (Object.keys(subChildren).length > 0) entry.children = subChildren;
+          children[key] = entry;
+        } else {
+          children[key] = { type: "property", detail: value.constructor?.name || "object" };
+        }
+      } else if (vType === "string") {
+        children[key] = { type: "property", detail: "string" };
+      } else if (vType === "number") {
+        children[key] = { type: "property", detail: "number", info: String(value) };
+      } else if (vType === "boolean") {
+        children[key] = { type: "property", detail: "boolean" };
+      }
+      count++;
+    } catch {
+      // Skip properties that throw on access
+    }
+  }
+
+  // Second: walk prototype chain for methods and getters not yet covered
+  let proto = Object.getPrototypeOf(obj);
+  while (proto && proto !== Object.prototype) {
+    for (const name of Object.getOwnPropertyNames(proto)) {
+      if (count >= maxChildren) break;
+      if (name.startsWith("_") || name.startsWith("#")) continue;
+      if (skipNames.has(name)) continue;
+      if (children[name]) continue;
+
+      try {
+        const descriptor = Object.getOwnPropertyDescriptor(proto, name);
+        if (!descriptor) continue;
+
+        if (typeof descriptor.value === "function") {
+          const fn = descriptor.value;
+          const fnStr = fn.toString();
+          const match = fnStr.match(/^(?:async\s+)?(?:function\s*\w*\s*)?(\([^)]*\))|^(?:async\s+)?(\([^)]*\))\s*=>|^(?:async\s+)?\w+\s*(\([^)]*\))/);
+          const params = match ? (match[1] || match[2] || match[3] || "()") : "()";
+          const isAsync = fnStr.trimStart().startsWith("async");
+          const returnHint = isAsync ? "Promise<any>" : "any";
+          children[name] = { type: "method", detail: `${params} => ${returnHint}` };
+          count++;
+        } else if (descriptor.get && !descriptor.set) {
+          children[name] = { type: "property", detail: "any" };
+          count++;
+        } else if (descriptor.get && descriptor.set) {
+          // Getter+setter pair (wrapper/interceptor) — skip to find real definition deeper
+          continue;
+        }
+      } catch { /* skip */ }
+    }
+    proto = Object.getPrototypeOf(proto);
+  }
+
+  return children;
+}
+
+/**
+ * Walk global Foundry objects at runtime and populate completions for:
+ * foundry.utils, game, canvas, ui, Hooks, CONST, fromUuid/fromUuidSync,
+ * and system globals (e.g. dnd5e).
+ */
+function injectGlobalCompletions(): void {
+  const g = globalThis as any;
+
+  // foundry.utils — utility functions
+  if (g.foundry?.utils) {
+    const utilsNode = COMPLETION_TREE.foundry?.children?.utils;
+    if (utilsNode) {
+      const utils = objectToCompletions(g.foundry.utils, 1);
+      mergeCompletions(utilsNode, utils);
+      console.log(`macro-autocomplete | Injected ${Object.keys(utils).length} foundry.utils members`);
+    }
+  }
+
+  // game — the Game instance
+  if (g.game) {
+    if (!COMPLETION_TREE.game) {
+      COMPLETION_TREE.game = { type: "object", detail: "Game", info: "The active Game instance" };
+    }
+    const gameMembers = objectToCompletions(g.game, 2);
+    mergeCompletions(COMPLETION_TREE.game, gameMembers);
+    console.log(`macro-autocomplete | Injected ${Object.keys(gameMembers).length} game members`);
+  }
+
+  // canvas — the Canvas instance
+  if (g.canvas) {
+    if (!COMPLETION_TREE.canvas) {
+      COMPLETION_TREE.canvas = { type: "object", detail: "Canvas", info: "The game canvas" };
+    }
+    const canvasMembers = objectToCompletions(g.canvas, 2);
+    mergeCompletions(COMPLETION_TREE.canvas, canvasMembers);
+    console.log(`macro-autocomplete | Injected ${Object.keys(canvasMembers).length} canvas members`);
+  }
+
+  // ui — UI singletons
+  if (g.ui) {
+    if (!COMPLETION_TREE.ui) {
+      COMPLETION_TREE.ui = { type: "object", detail: "object", info: "Foundry UI singletons" };
+    }
+    const uiMembers = objectToCompletions(g.ui, 2);
+    mergeCompletions(COMPLETION_TREE.ui, uiMembers);
+    console.log(`macro-autocomplete | Injected ${Object.keys(uiMembers).length} ui members`);
+  }
+
+  // Hooks — static class
+  if (g.Hooks && typeof g.Hooks === "function") {
+    if (!COMPLETION_TREE.Hooks) {
+      COMPLETION_TREE.Hooks = { type: "class", detail: "class Hooks", info: "Event hooks manager" };
+    }
+    const hooksWalked = classToCompletions(g.Hooks);
+    if (!COMPLETION_TREE.Hooks.staticChildren) COMPLETION_TREE.Hooks.staticChildren = {};
+    mergeCompletions({ children: COMPLETION_TREE.Hooks.staticChildren }, hooksWalked.staticChildren);
+    console.log(`macro-autocomplete | Injected ${Object.keys(hooksWalked.staticChildren).length} Hooks static members`);
+  }
+
+  // CONST — constants object
+  if (g.CONST) {
+    if (!COMPLETION_TREE.CONST) {
+      COMPLETION_TREE.CONST = { type: "object", detail: "object", info: "Foundry constants" };
+    }
+    const constMembers = objectToCompletions(g.CONST, 2);
+    mergeCompletions(COMPLETION_TREE.CONST, constMembers);
+    console.log(`macro-autocomplete | Injected ${Object.keys(constMembers).length} CONST members`);
+  }
+
+  // Global functions: fromUuid, fromUuidSync
+  for (const fnName of ["fromUuid", "fromUuidSync"]) {
+    if (typeof g[fnName] === "function" && !COMPLETION_TREE[fnName]) {
+      const fn = g[fnName];
+      const fnStr = fn.toString();
+      const match = fnStr.match(/^(?:async\s+)?(?:function\s*\w*\s*)?(\([^)]*\))|^(?:async\s+)?(\([^)]*\))\s*=>|^(?:async\s+)?\w+\s*(\([^)]*\))/);
+      const params = match ? (match[1] || match[2] || match[3] || "()") : "()";
+      const isAsync = fnStr.trimStart().startsWith("async");
+      const returnHint = isAsync ? "Promise<Document>" : "Document | null";
+      COMPLETION_TREE[fnName] = { type: "function", detail: `${params} => ${returnHint}`, info: `Resolve a UUID to a document${isAsync ? " (async)" : " (sync)"}` };
+    }
+  }
+
+  // Global classes commonly used in macros: Dialog, Roll, ChatMessage
+  for (const className of ["Dialog", "Roll", "ChatMessage"]) {
+    if (typeof g[className] === "function") {
+      if (!COMPLETION_TREE[className]) {
+        COMPLETION_TREE[className] = { type: "class", detail: `class ${className}`, info: className };
+      }
+      const walked = classToCompletions(g[className]);
+      if (Object.keys(walked.staticChildren).length > 0) {
+        if (!COMPLETION_TREE[className].staticChildren) COMPLETION_TREE[className].staticChildren = {};
+        mergeCompletions({ children: COMPLETION_TREE[className].staticChildren }, walked.staticChildren);
+      }
+      if (Object.keys(walked.instanceChildren).length > 0) {
+        if (!COMPLETION_TREE[className].instanceChildren) COMPLETION_TREE[className].instanceChildren = {};
+        mergeCompletions({ children: COMPLETION_TREE[className].instanceChildren }, walked.instanceChildren);
+      }
+    }
+  }
+
+  // System global (e.g., dnd5e, pf2e, etc.) — walk whatever the system provides
+  if (g.game?.system?.id) {
+    const systemId = g.game.system.id;
+    const systemGlobal = g[systemId];
+    if (systemGlobal && typeof systemGlobal === "object") {
+      if (!COMPLETION_TREE[systemId]) {
+        COMPLETION_TREE[systemId] = { type: "object", detail: "object", info: `${systemId} system namespace` };
+      }
+      const systemMembers = objectToCompletions(systemGlobal, 2);
+      mergeCompletions(COMPLETION_TREE[systemId], systemMembers);
+      console.log(`macro-autocomplete | Injected ${Object.keys(systemMembers).length} ${systemId} system members`);
+    }
+  }
+}
+
+/**
+ * Recursively walk a foundry namespace object and create class/object entries.
+ * Classes get their static methods extracted. Sub-objects are recursed into.
+ * Classes are also added as top-level entries (skipping "Base*" prefixed ones).
+ * Returns the number of classes found.
+ */
+function walkNamespaceToTree(ns: any, parentNode: CompletionNode, addTopLevel: boolean = true): number {
+  let classCount = 0;
+
+  for (const key of Object.keys(ns)) {
+    if (key.startsWith("_")) continue;
+
+    try {
+      const value = ns[key];
+
+      if (typeof value === "function" && value.prototype) {
+        // It's a class constructor
+        const walked = classToCompletions(value);
+        const entry: CompletionEntry = {
+          type: "class",
+          detail: `class ${key}`,
+          info: key,
+        };
+
+        if (walked.constructorDetail) {
+          entry.constructorDetail = walked.constructorDetail;
+        }
+        if (Object.keys(walked.staticChildren).length > 0) {
+          entry.staticChildren = walked.staticChildren;
+        }
+        if (Object.keys(walked.instanceChildren).length > 0) {
+          entry.instanceChildren = walked.instanceChildren;
+        }
+
+        parentNode[key] = entry;
+
+        // Also add/merge into top-level tree entry (skip "Base*" classes)
+        if (addTopLevel && !key.startsWith("Base")) {
+          if (COMPLETION_TREE[key]) {
+            if (Object.keys(walked.staticChildren).length > 0) {
+              if (!COMPLETION_TREE[key].staticChildren) COMPLETION_TREE[key].staticChildren = {};
+              mergeCompletions({ children: COMPLETION_TREE[key].staticChildren }, walked.staticChildren);
+            }
+            if (Object.keys(walked.instanceChildren).length > 0) {
+              if (!COMPLETION_TREE[key].instanceChildren) COMPLETION_TREE[key].instanceChildren = {};
+              mergeCompletions({ children: COMPLETION_TREE[key].instanceChildren }, walked.instanceChildren);
+            }
+            if (entry.constructorDetail && !COMPLETION_TREE[key].constructorDetail) {
+              COMPLETION_TREE[key].constructorDetail = entry.constructorDetail;
+            }
+          } else {
+            COMPLETION_TREE[key] = { ...entry };
+          }
+        }
+
+        classCount++;
+      } else if (value && typeof value === "object" && !Array.isArray(value)) {
+        // It's a sub-namespace object — recurse
+        const subEntry: CompletionEntry = {
+          type: "object",
+          detail: "object",
+          info: key,
+        };
+        subEntry.children = {};
+        classCount += walkNamespaceToTree(value, subEntry.children, addTopLevel);
+        if (Object.keys(subEntry.children).length > 0) {
+          parentNode[key] = subEntry;
+        }
+      }
+    } catch {
+      // Skip problematic entries
+    }
+  }
+
+  return classCount;
+}
+
+/**
+ * Walk foundry namespaces at runtime and create class entries with static methods.
+ * Processes foundry.documents (and sub-namespaces like collections)
+ * and foundry.applications (api, sidebar, sheets, etc.).
+ * Classes are navigable at their namespace path (e.g., foundry.applications.api.DialogV2)
+ * and also added as top-level entries (e.g., DialogV2).
+ */
+function injectFoundryNamespaceCompletions(): void {
+  const foundryNS = (globalThis as any).foundry;
+  if (!foundryNS || typeof foundryNS !== "object") {
+    console.log("macro-autocomplete | foundry namespace not available, skipping");
+    return;
+  }
+
+  // Ensure foundry path exists in tree
+  if (!COMPLETION_TREE.foundry) {
+    COMPLETION_TREE.foundry = { type: "object", detail: "object", info: "Foundry VTT core namespace" };
+  }
+  if (!COMPLETION_TREE.foundry.children) {
+    COMPLETION_TREE.foundry.children = {};
+  }
+
+  const namespacesToWalk = ["documents", "applications"];
+  let totalClasses = 0;
+
+  for (const nsName of namespacesToWalk) {
+    const ns = foundryNS[nsName];
+    if (!ns || typeof ns !== "object") continue;
+
+    if (!COMPLETION_TREE.foundry.children[nsName]) {
+      COMPLETION_TREE.foundry.children[nsName] = {
+        type: "object", detail: "object", info: `Foundry ${nsName}`,
+      };
+    }
+    if (!COMPLETION_TREE.foundry.children[nsName].children) {
+      COMPLETION_TREE.foundry.children[nsName].children = {};
+    }
+
+    const count = walkNamespaceToTree(ns, COMPLETION_TREE.foundry.children[nsName].children);
+    totalClasses += count;
+    console.log(`macro-autocomplete | Injected ${count} foundry.${nsName} class entries`);
+  }
+
+  console.log(`macro-autocomplete | Total foundry namespace classes: ${totalClasses}`);
 }
 
 // ── Signature map (built from the tree for quick lookup) ──
@@ -1014,8 +1360,22 @@ function buildSignatureMap(node: CompletionNode, prefix: string): void {
         SIGNATURE_MAP.set(fullPath, { params, info: entry.info ?? "" });
       }
     }
+    // Register constructor signatures for class entries with constructorDetail
+    if (entry.type === "class" && entry.constructorDetail) {
+      const match = entry.constructorDetail.match(/^\(([^)]*)\)/);
+      if (match) {
+        const params = match[1].split(",").map(p => p.trim()).filter(p => p.length > 0);
+        SIGNATURE_MAP.set(`new ${fullPath}`, { params, info: entry.info ?? "" });
+      }
+    }
     if (entry.children) {
       buildSignatureMap(entry.children, fullPath);
+    }
+    if (entry.staticChildren) {
+      buildSignatureMap(entry.staticChildren, fullPath);
+    }
+    if (entry.instanceChildren) {
+      buildSignatureMap(entry.instanceChildren, fullPath);
     }
   }
 }
@@ -1102,7 +1462,13 @@ function getSignatureContext(docText: string, cursorPos: number): { funcPath: st
   const before = docText.substring(0, openParenPos);
   const match = before.match(/([\w.]+)$/);
   if (!match) return null;
-  const funcPath = match[1];
+  let funcPath = match[1];
+
+  // Check for "new ClassName(" pattern - look for "new" keyword before the identifier
+  const preIdentifier = before.substring(0, match.index!).trimEnd();
+  if (preIdentifier.endsWith("new")) {
+    funcPath = `new ${funcPath}`;
+  }
 
   // Count commas at depth 0 between openParen and cursor to determine param index
   let paramIndex = 0;
@@ -1162,15 +1528,48 @@ function updateSignatureHint(view: any): void {
 // ── Completion tree navigation ──
 
 /**
+ * Get the visible children for an entry based on its type.
+ * - Class entries (type="class"): children + staticChildren
+ * - Variable/other entries: children + instanceChildren
+ */
+function getVisibleChildren(entry: CompletionEntry): CompletionNode {
+  const result: CompletionNode = {};
+  if (entry.children) Object.assign(result, entry.children);
+  if (entry.type === "class") {
+    if (entry.staticChildren) Object.assign(result, entry.staticChildren);
+  } else {
+    if (entry.instanceChildren) Object.assign(result, entry.instanceChildren);
+    // Type-based resolution: if detail names a known class, merge its instance members.
+    // This lets properties like workflow.attackRoll (detail: "D20Roll") show D20Roll methods.
+    // Local children/instanceChildren take precedence (already assigned above).
+    if (entry.detail) {
+      const typeName = entry.detail;
+      if (/^[A-Z]\w*$/.test(typeName)) {
+        const classEntry = COMPLETION_TREE[typeName];
+        if (classEntry?.instanceChildren) {
+          for (const [k, v] of Object.entries(classEntry.instanceChildren)) {
+            if (!result[k]) result[k] = v;
+          }
+        }
+      }
+    }
+  }
+  return result;
+}
+
+/**
  * Navigate the completion tree to find the node at the given path segments.
- * Returns the children of the deepest matched node.
+ * Uses getVisibleChildren() to show the right members based on entry type.
+ * Returns the visible children of the deepest matched node.
  */
 function getCompletionsForPath(segments: string[]): CompletionNode | null {
   let node = COMPLETION_TREE;
   for (const seg of segments) {
     const entry = node[seg];
-    if (!entry?.children) return null;
-    node = entry.children;
+    if (!entry) return null;
+    const visible = getVisibleChildren(entry);
+    if (Object.keys(visible).length === 0) return null;
+    node = visible;
   }
   return node;
 }
@@ -1192,11 +1591,162 @@ function getEditorView(element: HTMLElement): any | null {
   return null;
 }
 
+// ── Type inference ──
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Extract a class name from a function's detail/return-type string.
+ * Handles patterns like:
+ *   "(data?) => Promise<Actor.Stored | null>"  → "Actor"
+ *   "(formula) => Roll<D>"                      → "Roll"
+ *   "(config?) => Item"                          → "Item"
+ * Returns null if no known class name can be extracted.
+ */
+function extractReturnType(detail: string | undefined): string | null {
+  if (!detail) return null;
+  const arrowMatch = detail.match(/=>\s*(.+)$/);
+  if (!arrowMatch) return null;
+  let ret = arrowMatch[1].trim();
+  // Unwrap Promise<X>, MaybePromise<X>
+  const promiseMatch = ret.match(/^(?:Promise|MaybePromise)<(.+)>$/);
+  if (promiseMatch) ret = promiseMatch[1].trim();
+  // Remove union members: | null, | undefined, | void
+  ret = ret.replace(/\s*\|\s*(?:null|undefined|void)\b/g, "").trim();
+  // Remove sub-type qualifiers: .Stored, .Implementation, .ConfiguredInstance
+  ret = ret.replace(/\.\w+/g, "").trim();
+  // Remove generic parameters: Roll<D> → Roll
+  ret = ret.replace(/<[^>]*>/g, "").trim();
+  // Accept only if it's a simple PascalCase name that exists in the tree
+  if (/^[A-Z]\w*$/.test(ret) && COMPLETION_TREE[ret]) return ret;
+  return null;
+}
+
+// Static factory method names that typically return instances of their class
+const FACTORY_METHOD_NAMES = new Set([
+  "create", "get", "build", "fromData", "fromJSON", "fromDropData",
+  "fromImport", "fromSource", "fromTerms", "createDialog",
+]);
+
+/**
+ * Get instance-level completions for a class by name.
+ * Checks instanceChildren on the class entry, falling back to children for non-class entries.
+ */
+function getInstanceCompletions(className: string): CompletionNode | null {
+  const classEntry = COMPLETION_TREE[className];
+  if (!classEntry) return null;
+  // Prefer instanceChildren (methods/properties available on instances)
+  if (classEntry.instanceChildren && Object.keys(classEntry.instanceChildren).length > 0) {
+    return classEntry.instanceChildren;
+  }
+  // Fall back to children (for entries that don't separate static/instance)
+  return classEntry.children || null;
+}
+
+/**
+ * Resolve the return type of a method to a class name, using three strategies:
+ * 1. Explicit returnType field on the entry
+ * 2. Parse the detail string for a known class name
+ * 3. Factory method heuristic (common names like create/get return the class type)
+ */
+function resolveMethodReturnType(methodEntry: CompletionEntry, methodName: string, classEntry: CompletionEntry, className: string): string | null {
+  if (methodEntry.returnType && COMPLETION_TREE[methodEntry.returnType]) {
+    return methodEntry.returnType;
+  }
+  const parsed = extractReturnType(methodEntry.detail);
+  if (parsed) return parsed;
+  if (FACTORY_METHOD_NAMES.has(methodName) && classEntry.type === "class") {
+    return className;
+  }
+  return null;
+}
+
+/**
+ * Scan the document text for variable assignments and infer what completions the
+ * variable should produce. Handles:
+ *   const/let/var x = new ClassName(...)           — instance completions for ClassName
+ *   const/let/var x = ClassName.method(...)        — uses returnType or detail parsing
+ *   const/let/var x = await ClassName.method(...)
+ *   const/let/var x = dotted.path                  — resolves path through completion tree
+ * Returns a CompletionNode for the variable's direct children, or null.
+ */
+function inferVariableCompletions(varName: string, docText: string): CompletionNode | null {
+  const escaped = escapeRegExp(varName);
+
+  // Build a combined regex that captures all three patterns at once.
+  // Group layout (each arm has declaration and bare-assignment alternatives):
+  //   Pattern 1 (new): groups 1,2 = ClassName
+  //   Pattern 2 (static method call): groups 3,4 = ClassName; groups 5,6 = methodName
+  //   Pattern 3 (dotted path, no call): groups 7,8 = full path
+  const combined = new RegExp(
+    // Pattern 1a: (const|let|var) x = [await] new ClassName
+    `(?:const|let|var)\\s+${escaped}\\s*=\\s*(?:await\\s+)?new\\s+(\\w+)` +
+    // Pattern 1b: x = [await] new ClassName  (bare assignment)
+    `|(?:^|[;\\n])\\s*${escaped}\\s*=\\s*(?:await\\s+)?new\\s+(\\w+)` +
+    // Pattern 2a: (const|let|var) x = [await] Class.method(
+    `|(?:const|let|var)\\s+${escaped}\\s*=\\s*(?:await\\s+)?(\\w+)\\.(\\w+)\\s*\\(` +
+    // Pattern 2b: x = [await] Class.method(   (bare assignment)
+    `|(?:^|[;\\n])\\s*${escaped}\\s*=\\s*(?:await\\s+)?(\\w+)\\.(\\w+)\\s*\\(` +
+    // Pattern 3a: (const|let|var) x = dotted.path  (not followed by open-paren)
+    `|(?:const|let|var)\\s+${escaped}\\s*=\\s*(?:await\\s+)?(\\w+(?:\\.\\w+)*)(?!\\s*\\()` +
+    // Pattern 3b: x = dotted.path  (bare assignment, not followed by open-paren)
+    `|(?:^|[;\\n])\\s*${escaped}\\s*=\\s*(?:await\\s+)?(\\w+(?:\\.\\w+)*)(?!\\s*\\()`,
+    "m"
+  );
+
+  const m = docText.match(combined);
+  if (!m) return null;
+
+  // Pattern 1: new ClassName(...)
+  const newClass = m[1] || m[2];
+  if (newClass && COMPLETION_TREE[newClass]) {
+    return getInstanceCompletions(newClass);
+  }
+
+  // Pattern 2: ClassName.method(...)
+  const className = m[3] || m[5];
+  const methodName = m[4] || m[6];
+  if (className && methodName) {
+    const classEntry = COMPLETION_TREE[className];
+    if (classEntry) {
+      const visible = getVisibleChildren(classEntry);
+      const methodEntry = visible[methodName];
+      if (methodEntry) {
+        const returnTypeName = resolveMethodReturnType(methodEntry, methodName, classEntry, className);
+        if (returnTypeName) return getInstanceCompletions(returnTypeName);
+      }
+    }
+  }
+
+  // Pattern 3: dotted.path assignment (not a function call)
+  const fullPath = m[7] || m[8];
+  if (fullPath) {
+    const segments = fullPath.split(".");
+    let entry: CompletionEntry | undefined = COMPLETION_TREE[segments[0]];
+    if (entry) {
+      for (let i = 1; i < segments.length && entry; i++) {
+        const visible = getVisibleChildren(entry);
+        entry = visible[segments[i]];
+      }
+      if (entry) {
+        const result = getVisibleChildren(entry);
+        if (Object.keys(result).length > 0) return result;
+      }
+    }
+  }
+
+  return null;
+}
+
 // ── Completion source ──
 
 /**
  * Custom completion source for Foundry macros.
  * Context-aware: completes one segment at a time based on the dotted path prefix.
+ * Supports type inference for `new ClassName()`, `ClassName.method()`, and
+ * dotted-path assignments like `let a = actor.system.attributes.ac`.
  */
 function macroCompletionSource(context: any): any | null {
   const word = context.matchBefore(/[\w.]+/);
@@ -1211,15 +1761,45 @@ function macroCompletionSource(context: any): any | null {
   if (pathSegments.length === 0) {
     node = COMPLETION_TREE;
   } else {
+    // Try normal path resolution first
     const found = getCompletionsForPath(pathSegments);
-    if (!found) return null;
-    node = found;
+    if (found) {
+      node = found;
+    } else if (pathSegments.length >= 1 && !COMPLETION_TREE[pathSegments[0]]) {
+      // Root variable not in tree — try type inference
+      // e.g., "r.evaluate" where r = new Roll(...)
+      // e.g., "a.value" where a = actor.system.attributes.ac
+      const docText = context.state.doc.toString();
+      const inferred = inferVariableCompletions(pathSegments[0], docText);
+      if (inferred) {
+        // Walk remaining path segments through the inferred completions
+        let current: CompletionNode | null = inferred;
+        for (let i = 1; i < pathSegments.length && current; i++) {
+          const entry = current[pathSegments[i]];
+          if (entry) {
+            const visible = getVisibleChildren(entry);
+            current = Object.keys(visible).length > 0 ? visible : null;
+          } else {
+            current = null;
+          }
+        }
+        if (current) {
+          node = current;
+        } else {
+          return null;
+        }
+      } else {
+        return null;
+      }
+    } else {
+      return null;
+    }
   }
 
   const options = Object.entries(node)
     .filter(([key]) => key.toLowerCase().startsWith(currentSegment.toLowerCase()))
     .map(([key, entry]) => {
-      const hasChildren = !!entry.children;
+      const hasChildren = !!(entry.children || entry.staticChildren || entry.instanceChildren);
       return {
         label: key,
         type: entry.type ?? (hasChildren ? "namespace" : "property"),
@@ -1298,6 +1878,26 @@ function resolveInternals(view: any): boolean {
 
 const enhancedElements = new WeakSet<HTMLElement>();
 
+// Patch Text.prototype.line once to clamp out-of-range line numbers instead of throwing.
+// Foundry's ESLint preprocessor wraps source as `async () => {${source}\n}` adding one line,
+// but the postprocessor doesn't clamp line numbers. When ESLint reports parse errors at the
+// end of the preprocessed source (e.g., when a user pauses after typing "." to browse
+// completions), mapPos calls doc.line(N+1) on an N-line document, throwing a RangeError
+// that escapes through setTimeout to window.onerror.
+let _textLinePatched = false;
+function patchTextLine(view: any): void {
+  if (_textLinePatched) return;
+  const TextClass = view.state.doc.constructor;
+  if (!TextClass?.prototype?.line) return;
+  const origLine = TextClass.prototype.line;
+  TextClass.prototype.line = function(n: number) {
+    if (n < 1) n = 1;
+    else if (n > this.lines) n = this.lines;
+    return origLine.call(this, n);
+  };
+  _textLinePatched = true;
+}
+
 async function enhanceCodeMirror(element: HTMLElement): Promise<void> {
   if (enhancedElements.has(element)) return;
 
@@ -1309,6 +1909,7 @@ async function enhanceCodeMirror(element: HTMLElement): Promise<void> {
     return;
   }
 
+  patchTextLine(view);
   enhancedElements.add(element);
 
   const ready = resolveInternals(view);
