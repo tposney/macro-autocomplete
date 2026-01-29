@@ -1,0 +1,27 @@
+{
+  "id": "macro-autocomplete",
+  "title": "Macro Autocomplete",
+  "description": "Autocompletion for Foundry VTT macro editors using CodeMirror 6",
+
+  "version": "0.0.2",
+  "authors": [
+    {
+      "name": "Tim Posney",
+      "url": "https://gitlab.com/tposney",
+      "discord": "tposney#1462",
+      "gitlab": "tposney",
+      "ko-fi": "tposney"
+    }
+  ],
+  "scripts": [],
+  "esmodules": ["macro-autocomplete.js"],
+  "compatibility": {
+    "minimum": "13",
+    "verified": "13.351",
+    "maximum": "13.999"
+  },
+  "bugs": "https://gitlab.com/tposney/macro-autocomplete/-/issues",
+  "url": "https://gitlab.com/tposney/macro-autocomplete",
+  "manifest": "https://gitlab.com/tposney/macro-autocomplete/raw/main/package/module.json",
+  "download": "https://gitlab.com/tposney/macro-autocomplete/raw/main/package/macro-autocomplete-v0.0.2.zip"
+}
