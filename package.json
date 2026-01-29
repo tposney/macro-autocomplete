@@ -1,7 +1,7 @@
 {
 	"name": "macro-autocomplete",
 	"title": "Macro Autocomplete",
-	"version": "0.0.2",
+	"version": "0.0.3",
 	"description": "Autocompletion for Foundry VTT macro editors using CodeMirror 6",
 	"devDir": "/home/timp/foundry-data/foundryv13/Data/modules/",
 	"main": "src/macro-autocomplete.ts",
