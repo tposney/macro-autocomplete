@@ -5,7 +5,9 @@
 
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/tposney)
 
-Context-aware autocompletion for Foundry VTT macro editors (v13+). Enhances CodeMirror 6 with intelligent suggestions for Foundry's API, game system data, and macro variables.
+Context-aware autocompletion for Foundry VTT macro editors (v13). Enhances CodeMirror 6 with intelligent suggestions for Foundry's API, game system data, and macro variables.
+
+There is very little hard coded information in the module, most of the information comes from walking various CONFIG objects and system schemas to work out what should be available.
 
 * The module will walk the systems schema to identify auto completion targets.
 * The module will walk various foundry.xxxx (e.g. foundry.utils) to identify methods for auto completion.
@@ -17,7 +19,7 @@ Context-aware autocompletion for Foundry VTT macro editors (v13+). Enhances Code
 - **Dot-path completions** -- type `game.` to see properties, `actor.system.` to drill into system data
 - **Signature hints** -- shows function parameter info when you type `(`
 - **Runtime introspection** -- discovers globals (`game`, `canvas`, `ui`, `Hooks`, `CONST`, etc.) and their members at runtime
-- **Schema walking** -- recursively walks DataModel schemas for `actor.system.*` and `item.system.*` fields (works with any game system)
+- **Schema walking** -- recursively walks DataModel schemas for `actor.system.*` and `item.system.*` fields (system agnostic)
 - **Foundry namespace discovery** -- surfaces all classes from `foundry.documents` and `foundry.applications`
 - **Type enrichment** -- supplements runtime discovery with typed data from fvtt-types
 - **Macro variables** -- completions for `actor`, `token`, `character`, `speaker`, `args`, `scope`
@@ -47,6 +49,8 @@ const api = game.modules.get("macro-autocomplete")?.api;
 | `classToCompletions(cls)` | Walk a class and return `{ staticChildren, instanceChildren, constructorDetail }` |
 | `objectToCompletions(obj, maxDepth?)` | Walk a runtime object's properties and methods |
 | `valueToCompletionEntry(value, maxDepth?)` | Convert a runtime value to a completion entry |
+| `setContextCompletions(element, completions)` | Set per-element contextual completions for a `<code-mirror>` element |
+| `clearContextCompletions(element)` | Remove per-element contextual completions |
 
 ### CompletionEntry Fields
 
@@ -88,6 +92,46 @@ Hooks.on("macro-autocomplete.ready", ({ tree, classToCompletions, rebuildSignatu
   };
   rebuildSignatureMap();
 });
+
+// Walk a module's runtime API object to auto-generate completions
+Hooks.on("macro-autocomplete.ready", ({ tree, objectToCompletions, mergeCompletions, rebuildSignatureMap }) => {
+  const myApi = game.modules.get("my-module")?.api;
+  if (myApi) {
+    if (!tree.MyModule) {
+      tree.MyModule = { type: "object", detail: "object", info: "My module's API" };
+    }
+    // objectToCompletions walks the runtime object; mergeCompletions overlays type enrichment
+    mergeCompletions(tree.MyModule, objectToCompletions(myApi, 3));
+    rebuildSignatureMap();
+  }
+});
+```
+
+### Example: Per-element contextual completions
+
+Use `setContextCompletions` to provide additional completions scoped to a specific `<code-mirror>` element. These are merged with the global completion tree only for that element, useful for custom editors where a specific set of variables is available.
+
+```javascript
+const api = game.modules.get("macro-autocomplete")?.api;
+const codeMirrorEl = document.querySelector("code-mirror");
+
+// Define completions representing the variables available in this context
+const contextCompletions = {
+  target: {
+    type: "property", detail: "object", info: "The targeted actor",
+    children: {
+      saved: { type: "property", detail: "boolean", info: "Whether target passed the save" },
+      isHit: { type: "property", detail: "boolean", info: "Whether target was hit" },
+    }
+  },
+  damageTypes: { type: "property", detail: "object", info: "Damage types from the roll" },
+};
+
+// Set the contextual completions for this element
+api.setContextCompletions(codeMirrorEl, contextCompletions);
+
+// Clean up when the editor is closed
+api.clearContextCompletions(codeMirrorEl);
 ```
 
 ## Installation

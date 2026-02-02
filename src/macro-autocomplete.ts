@@ -456,6 +456,8 @@ function injectSchemaCompletions(): void {
       objectToCompletions,
       valueToCompletionEntry,
       fieldToCompletionNode,
+      setContextCompletions,
+      clearContextCompletions,
     };
 
     // Expose as module API (game.modules.get("macro-autocomplete").api)
@@ -1561,9 +1563,11 @@ function getVisibleChildren(entry: CompletionEntry): CompletionNode {
  * Navigate the completion tree to find the node at the given path segments.
  * Uses getVisibleChildren() to show the right members based on entry type.
  * Returns the visible children of the deepest matched node.
+ * @param segments - dotted path segments to navigate
+ * @param root - optional root node (defaults to COMPLETION_TREE)
  */
-function getCompletionsForPath(segments: string[]): CompletionNode | null {
-  let node = COMPLETION_TREE;
+function getCompletionsForPath(segments: string[], root?: CompletionNode): CompletionNode | null {
+  let node = root ?? COMPLETION_TREE;
   for (const seg of segments) {
     const entry = node[seg];
     if (!entry) return null;
@@ -1747,8 +1751,11 @@ function inferVariableCompletions(varName: string, docText: string): CompletionN
  * Context-aware: completes one segment at a time based on the dotted path prefix.
  * Supports type inference for `new ClassName()`, `ClassName.method()`, and
  * dotted-path assignments like `let a = actor.system.attributes.ac`.
+ *
+ * Optionally merges per-element
+ * contextual completions into the global tree for root-level lookups.
  */
-function macroCompletionSource(context: any): any | null {
+function macroCompletionSourceWithContext(context: any, extraCompletions?: CompletionNode): any | null {
   const word = context.matchBefore(/[\w.]+/);
   if (!word && !context.explicit) return null;
 
@@ -1757,15 +1764,21 @@ function macroCompletionSource(context: any): any | null {
   const currentSegment = parts.pop() ?? "";
   const pathSegments = parts;
 
+  // Build effective root: merge extra completions at root level so contextual
+  // variables (e.g. findNearby, hasCondition) appear alongside global tree entries.
+  const effectiveRoot = extraCompletions
+    ? { ...COMPLETION_TREE, ...extraCompletions }
+    : COMPLETION_TREE;
+
   let node: CompletionNode;
   if (pathSegments.length === 0) {
-    node = COMPLETION_TREE;
+    node = effectiveRoot;
   } else {
-    // Try normal path resolution first
-    const found = getCompletionsForPath(pathSegments);
+    // Try normal path resolution first — check extra completions first, then global tree
+    const found = getCompletionsForPath(pathSegments, effectiveRoot);
     if (found) {
       node = found;
-    } else if (pathSegments.length >= 1 && !COMPLETION_TREE[pathSegments[0]]) {
+    } else if (pathSegments.length >= 1 && !effectiveRoot[pathSegments[0]]) {
       // Root variable not in tree — try type inference
       // e.g., "r.evaluate" where r = new Roll(...)
       // e.g., "a.value" where a = actor.system.attributes.ac
@@ -1874,6 +1887,23 @@ function resolveInternals(view: any): boolean {
   return !!_appendConfig && !!_languageData;
 }
 
+// ── Per-element contextual completions ──
+
+/**
+ * WeakMap from code-mirror elements to additional completions that should be
+ * available only in that specific editor. Used by modules (e.g., midi-qol)
+ * to inject context-specific variables for condition expression editors.
+ */
+const elementContextCompletions = new WeakMap<HTMLElement, CompletionNode>();
+
+function setContextCompletions(element: HTMLElement, completions: CompletionNode): void {
+  elementContextCompletions.set(element, completions);
+}
+
+function clearContextCompletions(element: HTMLElement): void {
+  elementContextCompletions.delete(element);
+}
+
 // ── Enhancement ──
 
 const enhancedElements = new WeakSet<HTMLElement>();
@@ -1921,9 +1951,13 @@ async function enhanceCodeMirror(element: HTMLElement): Promise<void> {
   try {
     const extensions: any[] = [];
 
-    // Completion source
+    // Completion source — wraps macroCompletionSource to include per-element contextual completions
+    const elementCompletionSource = (context: any) => {
+      const extra = elementContextCompletions.get(element);
+      return macroCompletionSourceWithContext(context, extra);
+    };
     extensions.push(
-      _languageData.of(() => [{ autocomplete: macroCompletionSource }])
+      _languageData.of(() => [{ autocomplete: elementCompletionSource }])
     );
 
     // Signature hint via updateListener
