@@ -1391,6 +1391,26 @@ function rebuildSignatureMap(): void {
 // Initial build (will be rebuilt after schema injection)
 buildSignatureMap(COMPLETION_TREE, "");
 
+/**
+ * Extract signature info for a dotted path from an arbitrary completion tree.
+ * Used for context completions that aren't in the global SIGNATURE_MAP.
+ */
+function getSignatureFromTree(funcPath: string, tree: CompletionNode): SignatureInfo | null {
+  const segments = funcPath.split(".");
+  let node: CompletionNode = tree;
+  let entry: CompletionEntry | undefined;
+  for (const seg of segments) {
+    entry = node[seg];
+    if (!entry) return null;
+    if (entry.children) node = entry.children;
+  }
+  if (!entry || (entry.type !== "function" && entry.type !== "method") || !entry.detail) return null;
+  const match = entry.detail.match(/^\(([^)]*)\)/);
+  if (!match) return null;
+  const params = match[1].split(",").map(p => p.trim()).filter(p => p.length > 0);
+  return { params, info: entry.info ?? "" };
+}
+
 // ── Signature hint tooltip ──
 
 let activeTooltip: HTMLElement | null = null;
@@ -1411,7 +1431,8 @@ function createTooltipElement(): HTMLElement {
     font-size: 12px;
     line-height: 1.4;
     pointer-events: none;
-    white-space: nowrap;
+    white-space: pre-line;
+    max-width: 500px;
     box-shadow: 0 2px 8px rgba(0,0,0,0.4);
   `;
   document.body.appendChild(el);
@@ -1427,7 +1448,8 @@ function hideSignatureTooltip(): void {
 }
 
 /**
- * Render the signature tooltip with the current parameter highlighted.
+ * Render the signature tooltip with the current parameter highlighted
+ * and info text shown below (if present).
  */
 function renderSignatureTooltip(sig: SignatureInfo, paramIndex: number, funcName: string): string {
   const parts = sig.params.map((p, i) => {
@@ -1436,7 +1458,11 @@ function renderSignatureTooltip(sig: SignatureInfo, paramIndex: number, funcName
     }
     return p;
   });
-  return `<span style="color: var(--color-light-4, #999);">${funcName}</span>(${parts.join(", ")})`;
+  let html = `<span style="color: var(--color-light-4, #999);">${funcName}</span>(${parts.join(", ")})`;
+  if (sig.info) {
+    html += `\n<span style="color: var(--color-light-3, #aaa);">${sig.info}</span>`;
+  }
+  return html;
 }
 
 /**
@@ -1489,6 +1515,11 @@ function getSignatureContext(docText: string, cursorPos: number): { funcPath: st
  * Check if we should show/update/hide the signature tooltip based on the current editor state.
  */
 function updateSignatureHint(view: any): void {
+  // If the editor has been removed from the DOM (window closed), clean up
+  if (!view.dom?.isConnected) {
+    if (activeTooltipView === view) hideSignatureTooltip();
+    return;
+  }
   const state = view.state;
   if (!state) return;
 
@@ -1505,7 +1536,17 @@ function updateSignatureHint(view: any): void {
     return;
   }
 
-  const sig = SIGNATURE_MAP.get(ctx.funcPath);
+  let sig = SIGNATURE_MAP.get(ctx.funcPath);
+  // Fall back to context completions (e.g. condition editor injects findNearby at root level)
+  if (!sig) {
+    const element = viewToElement.get(view);
+    if (element) {
+      const ctxCompletions = elementContextCompletions.get(element);
+      if (ctxCompletions) {
+        sig = getSignatureFromTree(ctx.funcPath, ctxCompletions);
+      }
+    }
+  }
   if (!sig || sig.params.length === 0) {
     if (activeTooltipView === view) hideSignatureTooltip();
     return;
@@ -1524,7 +1565,9 @@ function updateSignatureHint(view: any): void {
   activeTooltipView = view;
   activeTooltip.innerHTML = renderSignatureTooltip(sig, paramIndex, ctx.funcPath);
   activeTooltip.style.left = `${coords.left}px`;
-  activeTooltip.style.top = `${coords.top - 24}px`;
+  // Position above the cursor, accounting for tooltip height
+  const tooltipHeight = activeTooltip.offsetHeight || 24;
+  activeTooltip.style.top = `${coords.top - tooltipHeight - 4}px`;
 }
 
 // ── Completion tree navigation ──
@@ -1895,6 +1938,8 @@ function resolveInternals(view: any): boolean {
  * to inject context-specific variables for condition expression editors.
  */
 const elementContextCompletions = new WeakMap<HTMLElement, CompletionNode>();
+/** Map from EditorView to the element it was enhanced from, for context completion lookups. */
+const viewToElement = new WeakMap<any, HTMLElement>();
 
 function setContextCompletions(element: HTMLElement, completions: CompletionNode): void {
   elementContextCompletions.set(element, completions);
@@ -1941,6 +1986,7 @@ async function enhanceCodeMirror(element: HTMLElement): Promise<void> {
 
   patchTextLine(view);
   enhancedElements.add(element);
+  viewToElement.set(view, element);
 
   const ready = resolveInternals(view);
   if (!ready) {
@@ -2013,6 +2059,15 @@ function initMacroAutoComplete(): void {
             if (cm.getAttribute("language") === "javascript") {
               enhanceCodeMirror(cm as HTMLElement);
             }
+          }
+        }
+      }
+      // Clean up signature tooltip when editor elements are removed from the DOM
+      if (activeTooltip) {
+        for (const node of Array.from(mutation.removedNodes)) {
+          if (node instanceof HTMLElement && (node.tagName === "CODE-MIRROR" || node.querySelector?.("code-mirror"))) {
+            hideSignatureTooltip();
+            break;
           }
         }
       }
