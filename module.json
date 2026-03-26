@@ -18,7 +18,7 @@
   "compatibility": {
     "minimum": "13",
     "verified": "13.351",
-    "maximum": "13.999"
+    "maximum": "14.999"
   },
   "bugs": "https://gitlab.com/tposney/macro-autocomplete/-/issues",
   "url": "https://gitlab.com/tposney/macro-autocomplete",

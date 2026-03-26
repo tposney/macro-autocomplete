@@ -1,0 +1,223 @@
+<div class="compositions-layout flexrow">
+  {{!-- Left sidebar: composition list --}}
+  <nav class="composition-sidebar flexcol">
+    <h4>Compositions</h4>
+    <ol class="composition-list">
+      {{#each compositions as |comp|}}
+      <li class="composition-entry {{#if comp.active}}active{{/if}}"
+          data-comp-id="{{comp.id}}">
+        <a class="comp-label" data-action="selectComposition" data-comp-id="{{comp.id}}">
+          {{comp.label}}
+        </a>
+        {{#if ../isCustom}}
+        <a data-action="duplicateComposition" data-comp-id="{{comp.id}}"
+           data-tooltip="Duplicate" class="comp-btn">
+          <i class="fa-solid fa-copy"></i>
+        </a>
+        <a data-action="deleteComposition" data-comp-id="{{comp.id}}"
+           data-tooltip="Delete" class="comp-btn">
+          <i class="fa-solid fa-trash"></i>
+        </a>
+        {{/if}}
+      </li>
+      {{/each}}
+    </ol>
+    {{#if isCustom}}
+    <a data-action="addComposition" class="button">
+      <i class="fa-solid fa-plus"></i> Add
+    </a>
+    {{/if}}
+  </nav>
+
+  {{!-- Right panel: selected composition editor --}}
+  <div class="composition-editor flexcol">
+    {{#if selectedComp}}
+    <fieldset>
+      <legend>{{selectedComp.label}}</legend>
+      {{#if isCustom}}
+      <div class="form-group slim">
+        <label>ID</label>
+        <div class="form-fields">
+          <input type="text" name="comp.id" value="{{selectedComp.id}}">
+        </div>
+      </div>
+      <div class="form-group slim">
+        <label>Label</label>
+        <div class="form-fields">
+          <input type="text" name="comp.label" value="{{selectedComp.label}}">
+        </div>
+      </div>
+      {{/if}}
+    </fieldset>
+
+    {{!-- Sprites --}}
+    <fieldset>
+      <legend>
+        Sprites ({{spriteCount}})
+        {{#if isCustom}}
+        <a data-action="addSprite" class="field-action"><i class="fa-solid fa-plus"></i></a>
+        {{/if}}
+      </legend>
+      {{#each sprites as |sprite|}}
+      <details class="sprite-entry" data-sprite-id="{{sprite.id}}">
+        <summary>
+          <span class="sprite-id">{{sprite.id}}</span>
+          <span class="sprite-count">({{sprite.placementCount}} placements)</span>
+          {{#if ../../isCustom}}
+          <a data-action="removeSprite" data-sprite-id="{{sprite.id}}" class="field-action">
+            <i class="fa-solid fa-trash"></i>
+          </a>
+          {{/if}}
+        </summary>
+        <div class="placements-list">
+          {{#each sprite.placements as |p idx|}}
+          <div class="placement-row" data-sprite-id="{{../sprite.id}}" data-placement-idx="{{idx}}">
+            <div class="form-group slim">
+              <label>Position</label>
+              <div class="form-fields">
+                <label>X</label>
+                <input type="number" name="sprite.{{../sprite.id}}.p.{{idx}}.x"
+                       value="{{p.x}}" {{#unless ../../../../isCustom}}disabled{{/unless}}>
+                <label>Y</label>
+                <input type="number" name="sprite.{{../sprite.id}}.p.{{idx}}.y"
+                       value="{{p.y}}" {{#unless ../../../../isCustom}}disabled{{/unless}}>
+              </div>
+            </div>
+            <div class="form-group slim">
+              <label>Depth</label>
+              <div class="form-fields">
+                <label>Elev</label>
+                <input type="number" name="sprite.{{../sprite.id}}.p.{{idx}}.elevation"
+                       value="{{p.elevation}}" {{#unless ../../../../isCustom}}disabled{{/unless}}>
+                <label>Sort</label>
+                <input type="number" name="sprite.{{../sprite.id}}.p.{{idx}}.sort"
+                       value="{{p.sort}}" {{#unless ../../../../isCustom}}disabled{{/unless}}>
+              </div>
+            </div>
+            <div class="form-group slim">
+              <label>Transform</label>
+              <div class="form-fields">
+                <label>ScX</label>
+                <input type="number" name="sprite.{{../sprite.id}}.p.{{idx}}.scaleX"
+                       value="{{p.scaleX}}" step="0.01" {{#unless ../../../../isCustom}}disabled{{/unless}}>
+                <label>ScY</label>
+                <input type="number" name="sprite.{{../sprite.id}}.p.{{idx}}.scaleY"
+                       value="{{p.scaleY}}" step="0.01" {{#unless ../../../../isCustom}}disabled{{/unless}}>
+              </div>
+            </div>
+            <div class="form-group slim">
+              <label>Visual</label>
+              <div class="form-fields">
+                <label>Alpha</label>
+                <input type="number" name="sprite.{{../sprite.id}}.p.{{idx}}.alpha"
+                       value="{{p.alpha}}" step="0.05" min="0" max="1"
+                       {{#unless ../../../../isCustom}}disabled{{/unless}}>
+                <label>Tint</label>
+                <input type="color" name="sprite.{{../sprite.id}}.p.{{idx}}.tint"
+                       value="{{p.tint}}" {{#unless ../../../../isCustom}}disabled{{/unless}}>
+              </div>
+            </div>
+            {{#if ../../../../isCustom}}
+            <a data-action="removePlacement" data-sprite-id="{{../sprite.id}}"
+               data-placement-idx="{{idx}}" class="field-action">
+              <i class="fa-solid fa-trash"></i> Remove Placement
+            </a>
+            {{/if}}
+          </div>
+          {{/each}}
+          {{#if ../../isCustom}}
+          <a data-action="addPlacement" data-sprite-id="{{sprite.id}}" class="button slim">
+            <i class="fa-solid fa-plus"></i> Add Placement
+          </a>
+          {{/if}}
+        </div>
+      </details>
+      {{/each}}
+    </fieldset>
+
+    {{!-- Lights --}}
+    <fieldset>
+      <legend>
+        Lights ({{lightCount}})
+        {{#if isCustom}}
+        <a data-action="addLight" class="field-action"><i class="fa-solid fa-plus"></i></a>
+        {{/if}}
+      </legend>
+      {{#each lights as |light|}}
+      <details class="light-entry" data-light-id="{{light.id}}">
+        <summary>
+          <span class="light-id">{{light.id}}</span>
+          {{#if ../../isCustom}}
+          <a data-action="removeLight" data-light-id="{{light.id}}" class="field-action">
+            <i class="fa-solid fa-trash"></i>
+          </a>
+          {{/if}}
+        </summary>
+        <div class="light-fields">
+          <div class="form-group slim">
+            <label>Position</label>
+            <div class="form-fields">
+              <label>X</label>
+              <input type="number" name="light.{{light.id}}.x" value="{{light.x}}"
+                     {{#unless ../../isCustom}}disabled{{/unless}}>
+              <label>Y</label>
+              <input type="number" name="light.{{light.id}}.y" value="{{light.y}}"
+                     {{#unless ../../isCustom}}disabled{{/unless}}>
+              <label>Elev</label>
+              <input type="number" name="light.{{light.id}}.elevation" value="{{light.elevation}}"
+                     {{#unless ../../isCustom}}disabled{{/unless}}>
+            </div>
+          </div>
+          <div class="form-group slim">
+            <label>Radius</label>
+            <div class="form-fields">
+              <label>Dim</label>
+              <input type="number" name="light.{{light.id}}.dim" value="{{light.dim}}"
+                     {{#unless ../../isCustom}}disabled{{/unless}}>
+              <label>Bright</label>
+              <input type="number" name="light.{{light.id}}.bright" value="{{light.bright}}"
+                     {{#unless ../../isCustom}}disabled{{/unless}}>
+            </div>
+          </div>
+          <div class="form-group slim">
+            <label>Appearance</label>
+            <div class="form-fields">
+              <label>Color</label>
+              <input type="color" name="light.{{light.id}}.color" value="{{light.color}}"
+                     {{#unless ../../isCustom}}disabled{{/unless}}>
+              <label>Alpha</label>
+              <input type="number" name="light.{{light.id}}.alpha" value="{{light.alpha}}"
+                     step="0.05" min="0" max="1" {{#unless ../../isCustom}}disabled{{/unless}}>
+            </div>
+          </div>
+          <div class="form-group slim">
+            <label>Animation</label>
+            <div class="form-fields">
+              <label>Type</label>
+              <input type="text" name="light.{{light.id}}.animation.type"
+                     value="{{light.animation.type}}" placeholder="none"
+                     {{#unless ../../isCustom}}disabled{{/unless}}>
+              <label>Spd</label>
+              <input type="number" name="light.{{light.id}}.animation.speed"
+                     value="{{light.animation.speed}}" {{#unless ../../isCustom}}disabled{{/unless}}>
+              <label>Int</label>
+              <input type="number" name="light.{{light.id}}.animation.intensity"
+                     value="{{light.animation.intensity}}" {{#unless ../../isCustom}}disabled{{/unless}}>
+            </div>
+          </div>
+        </div>
+      </details>
+      {{/each}}
+    </fieldset>
+
+    {{#if isCustom}}
+    <footer class="form-footer">
+      <button type="button" data-action="saveVista"><i class="fa-solid fa-save"></i> Save</button>
+    </footer>
+    {{/if}}
+
+    {{else}}
+    <p class="hint">Select a composition from the sidebar to edit it.</p>
+    {{/if}}
+  </div>
+</div>

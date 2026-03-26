@@ -1,0 +1,31 @@
+{{#if isBrowseMode}}
+<section data-application-part="browse" class="tab active"
+         data-tab="browse" data-group="primary"></section>
+{{else}}
+<nav data-application-part="tabs"></nav>
+
+<header class="vista-editor-header">
+  <a data-action="backToBrowse"><i class="fa-solid fa-arrow-left"></i> Back to Browse</a>
+  <h3>{{selectedVista.label}}</h3>
+  {{#if selectedVista.custom}}
+  <span class="tag custom">Custom</span>
+  {{else}}
+  <span class="tag builtin"><i class="fa-solid fa-lock"></i> Built-in</span>
+  {{/if}}
+</header>
+
+<section id="mac-vista-tab-general" class="tab {{tabs.general.cssClass}}"
+         data-tab="{{tabs.general.id}}" data-group="{{tabs.general.group}}">
+  <div data-application-part="general" class="scrollable"></div>
+</section>
+
+<section id="mac-vista-tab-compositions" class="tab {{tabs.compositions.cssClass}}"
+         data-tab="{{tabs.compositions.id}}" data-group="{{tabs.compositions.group}}">
+  <div data-application-part="compositions" class="scrollable"></div>
+</section>
+
+<section id="mac-vista-tab-scenes" class="tab {{tabs.scenes.cssClass}}"
+         data-tab="{{tabs.scenes.id}}" data-group="{{tabs.scenes.group}}">
+  <div data-application-part="scenes" class="scrollable"></div>
+</section>
+{{/if}}

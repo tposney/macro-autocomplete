@@ -1,0 +1,3035 @@
+/**
+ * Converts the macro-autocomplete completion tree into Blockly block definitions
+ * and JavaScript code generators.
+ *
+ * The completion tree provides typed function signatures, property types, and
+ * hierarchical namespaces. This module walks that tree and produces:
+ * - Block JSON definitions (shape, inputs, fields)
+ * - JavaScript generator functions (code output per block)
+ */
+
+import * as Blockly from "blockly/core";
+import { javascriptGenerator, Order } from "blockly/javascript";
+import { getCategoryConfig, getColourForPath, getScopeMergeKeys } from "./blocklyConfig";
+import {
+  type CompletionEntry, type CompletionNode,
+  setCompletionTree,
+  extractTypeName, resolveViaType, filteredKeys,
+} from "../completionResolver";
+
+/** Inline SVG data URIs for +/− buttons on multi-input blocks */
+const PLUS_IMAGE = "data:image/svg+xml," + encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="11" fill="#4CAF50"/><path d="M12 6v12M6 12h12" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/></svg>'
+);
+const MINUS_IMAGE = "data:image/svg+xml," + encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="11" fill="#e53935"/><path d="M6 12h12" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/></svg>'
+);
+
+/** Parse a function signature string like "(item, options?) => Promise<Workflow>" into parameter names */
+interface ParsedParam {
+  name: string;
+  optional: boolean;
+  /** If this param is a destructured object, the property names from it */
+  objectKeys?: string[];
+}
+
+function parseParams(detail: string): ParsedParam[] {
+  // Extract the outer parenthesised parameter list with balanced matching
+  const start = detail.indexOf("(");
+  if (start === -1) return [];
+  let depth = 0;
+  let end = -1;
+  for (let i = start; i < detail.length; i++) {
+    const ch = detail[i];
+    if (ch === "(" || ch === "{" || ch === "[") depth++;
+    else if (ch === ")" || ch === "}" || ch === "]") {
+      depth--;
+      if (depth === 0) { end = i; break; }
+    }
+  }
+  if (end === -1) return [];
+  const paramStr = detail.slice(start + 1, end).trim();
+  if (!paramStr) return [];
+
+  // Split on top-level commas (respecting nested braces/parens/brackets)
+  const params: string[] = [];
+  let current = "";
+  depth = 0;
+  for (let i = 0; i < paramStr.length; i++) {
+    const ch = paramStr[i];
+    if (ch === "(" || ch === "{" || ch === "[") depth++;
+    else if (ch === ")" || ch === "}" || ch === "]") depth--;
+    if (ch === "," && depth === 0) {
+      params.push(current.trim());
+      current = "";
+    } else {
+      current += ch;
+    }
+  }
+  if (current.trim()) params.push(current.trim());
+
+  return params.map((p) => {
+    // Destructured object param: {yes={}, no={}, ...config}={} or {a, b}
+    if (p.startsWith("{")) {
+      // Find the balanced closing brace for the destructured object
+      let d = 0;
+      let braceEnd = -1;
+      for (let i = 0; i < p.length; i++) {
+        if (p[i] === "{") d++;
+        else if (p[i] === "}") { d--; if (d === 0) { braceEnd = i; break; } }
+      }
+      if (braceEnd > 0) {
+        const inner = p.slice(1, braceEnd);
+        const suffix = p.slice(braceEnd + 1).trim(); // e.g. "={}" for optional
+        // Extract key names from the destructured pattern
+        const keys: string[] = [];
+        let keyBuf = "";
+        d = 0;
+        for (let i = 0; i < inner.length; i++) {
+          const ch = inner[i];
+          if (ch === "{" || ch === "(" || ch === "[") d++;
+          else if (ch === "}" || ch === ")" || ch === "]") d--;
+          if (ch === "," && d === 0) {
+            const key = keyBuf.trim().replace(/^\.\.\./, "").split(/[=:]/)[0].trim();
+            if (key && /^\w+$/.test(key)) keys.push(key);
+            keyBuf = "";
+          } else {
+            keyBuf += ch;
+          }
+        }
+        if (keyBuf.trim()) {
+          const key = keyBuf.trim().replace(/^\.\.\./, "").split(/[=:]/)[0].trim();
+          if (key && /^\w+$/.test(key)) keys.push(key);
+        }
+        return { name: "options", optional: suffix.startsWith("="), objectKeys: keys };
+      }
+    }
+    // Handle "name?: type" or "name: type" or just "name"
+    const nameMatch = p.match(/^(\w+)(\??)/);
+    if (!nameMatch) return { name: p, optional: false };
+    return { name: nameMatch[1], optional: p.includes("?") };
+  });
+}
+
+/** Sentinel value for "stop here, use the path as-is" in chain dropdowns */
+const SELF_VALUE = "__self__";
+const SELF_OPTION: [string, string] = ["\u2014", SELF_VALUE]; // em-dash display
+
+/** Sanitize a dotted path into a valid Blockly block type name */
+function pathToBlockType(path: string): string {
+  return "mac_" + path.replace(/\./g, "_").replace(/[^a-zA-Z0-9_]/g, "");
+}
+
+/** Track registered block types to avoid duplicates */
+const registeredBlocks = new Set<string>();
+
+/** Track which registered function blocks are async (their generator already produces `await`) */
+export const asyncBlockTypes = new Set<string>();
+
+/** Maximum tree depth to prevent infinite recursion */
+const MAX_DEPTH = 4;
+
+/** Maximum number of blocks to generate per category to keep toolbox manageable */
+const MAX_BLOCKS_PER_CATEGORY = 100;
+
+/** Reference to the root completion tree, used by chain blocks to resolve types
+ *  across subtrees (e.g., workflow.actor can look up actor's deep children). */
+let rootTree: CompletionNode | null = null;
+
+/**
+ * Get the effective children of a CompletionEntry for navigation.
+ * Merges children, staticChildren, and instanceChildren so that
+ * schema data, static methods, and prototype methods are all accessible.
+ */
+function getEffectiveChildren(entry: CompletionEntry): CompletionNode | undefined {
+  const sources: CompletionNode[] = [];
+  if (entry.children && Object.keys(entry.children).length > 0) sources.push(entry.children);
+  if (entry.staticChildren && Object.keys(entry.staticChildren).length > 0) sources.push(entry.staticChildren);
+  if (entry.instanceChildren && Object.keys(entry.instanceChildren).length > 0) sources.push(entry.instanceChildren);
+  if (sources.length === 0) return undefined;
+  if (sources.length === 1) return sources[0];
+  // Deep-merge sources so that entries appearing in multiple sources (e.g.,
+  // canvas.dimensions from both runtime children and static instanceChildren)
+  // combine their sub-properties rather than one overwriting the other.
+  const merged: CompletionNode = {};
+  for (const src of sources) {
+    for (const [key, value] of Object.entries(src)) {
+      if (!(key in merged)) {
+        merged[key] = value;
+      } else {
+        const existing = merged[key];
+        // Prefer more specific detail ("any" and "object" are uninformative from runtime)
+        if (value.detail && (!existing.detail || existing.detail === "any" || existing.detail === "object")) {
+          existing.detail = value.detail;
+        }
+        if (value.info && !existing.info) existing.info = value.info;
+        if (value.extends && !existing.extends) existing.extends = value.extends;
+        // Merge sub-children from both entries
+        if (value.children) {
+          if (!existing.children) {
+            existing.children = value.children;
+          } else {
+            Object.assign(existing.children, value.children);
+          }
+        }
+        if (value.instanceChildren) {
+          if (!existing.instanceChildren) {
+            existing.instanceChildren = value.instanceChildren;
+          } else {
+            Object.assign(existing.instanceChildren, value.instanceChildren);
+          }
+        }
+        if (value.staticChildren) {
+          if (!existing.staticChildren) {
+            existing.staticChildren = value.staticChildren;
+          } else {
+            Object.assign(existing.staticChildren, value.staticChildren);
+          }
+        }
+      }
+    }
+  }
+  return merged;
+}
+
+/**
+ * Walk a completion node tree following a chain of property selections.
+ * At each step, resolves dead ends via type-based lookup (detail → class)
+ * and root-tree cross-referencing (name-based walk).
+ * @param root      The starting CompletionNode to walk from
+ * @param selections  Array of property names to follow
+ * @returns The CompletionNode at the end of the chain, or null if dead end
+ */
+function walkSelections(root: CompletionNode, selections: string[]): CompletionNode | null {
+  let current: CompletionNode = root;
+  for (let i = 0; i < selections.length; i++) {
+    const sel = selections[i];
+    const child = current[sel];
+    if (!child) return null;
+    // Merge all child sources (schema data, static methods, prototype methods)
+    let next = getEffectiveChildren(child);
+    if (next) {
+      // Also merge type-resolved children so that entries with incomplete
+      // explicit children (e.g., workflow.item has system/activities but not
+      // name/img) can still reach type-inherited properties.
+      if (rootTree && child.detail) {
+        const typeResolved = resolveViaType(child.detail);
+        if (typeResolved) {
+          next = Object.assign({}, typeResolved, next);
+        }
+      }
+      current = next;
+      continue;
+    }
+    // Dead end — try type-based resolution
+    if (rootTree && child.detail) {
+      const resolved = resolveViaType(child.detail);
+      if (resolved) {
+        current = resolved;
+        continue;
+      }
+    }
+    // Try root-tree name-based resolution
+    if (rootTree) {
+      const resolved = resolveViaRootTreeWalk(selections, i);
+      if (resolved) {
+        current = resolved;
+        continue;
+      }
+    }
+    return null;
+  }
+  return current;
+}
+
+/**
+ * Walk a completion node tree following property selections and return the
+ * CompletionEntry at the final selection (not its children).
+ * Used to check whether a selected property is a function/method.
+ */
+function walkToEntry(root: CompletionNode, selections: string[]): CompletionEntry | null {
+  if (selections.length === 0) return null;
+  // Walk to the parent of the last selection
+  const parentSelections = selections.slice(0, -1);
+  const parentNode = parentSelections.length > 0
+    ? walkSelections(root, parentSelections)
+    : root;
+  if (!parentNode) return null;
+  return parentNode[selections[selections.length - 1]] ?? null;
+}
+
+/**
+ * Add function parameter value inputs to a block based on a function entry's detail.
+ * Parses the parameter signature and appends labelled value inputs.
+ * Sets block.isCall_, block.isAsync_, block.paramCount_.
+ */
+function addFunctionInputs(block: any, entry: CompletionEntry, prefix: string): void {
+  const params = parseParams(entry.detail ?? "");
+  const isAsync = entry.detail?.includes("Promise") ?? false;
+  block.isCall_ = true;
+  block.isAsync_ = isAsync;
+
+  // Only pre-attach template object literals during interactive use (user
+  // picking from dropdown). During loading (loadExtraState from JS parsing
+  // or workspace deserialization), the real arguments will be connected
+  // afterward — attaching templates would create duplicates.
+  const attachTemplates = !block.loading_;
+
+  const required = params.filter((p) => !p.optional);
+  const optional = params.filter((p) => p.optional);
+
+  let paramIndex = 0;
+  for (const param of required) {
+    const input = block
+      .appendValueInput(`${prefix}${paramIndex}`)
+      .appendField(paramIndex === 0 ? " ( " : ", ")
+      .appendField(param.name);
+    if (attachTemplates && param.objectKeys && param.objectKeys.length > 0) {
+      attachObjectLiteral(block, input, param.objectKeys);
+    } else if (!param.objectKeys || param.objectKeys.length === 0) {
+      attachShadowExpression(input);
+    }
+    paramIndex++;
+  }
+  if (optional.length > 0) {
+    // If the optional param is a destructured object, use its keys
+    const objParam = optional.find((p) => p.objectKeys && p.objectKeys.length > 0);
+    const input = block
+      .appendValueInput(`${prefix}${paramIndex}`)
+      .appendField(paramIndex === 0 ? " ( " : ", ")
+      .appendField("options");
+    if (attachTemplates && objParam?.objectKeys && objParam.objectKeys.length > 0) {
+      attachObjectLiteral(block, input, objParam.objectKeys);
+    } else if (!objParam?.objectKeys || objParam.objectKeys.length === 0) {
+      attachShadowExpression(input);
+    }
+    paramIndex++;
+  }
+  block.paramCount_ = paramIndex;
+
+  if (paramIndex > 0) {
+    block.appendDummyInput(`${prefix}CLOSE`).appendField(" )");
+  } else {
+    block.appendDummyInput(`${prefix}CLOSE`).appendField(" ( )");
+  }
+
+  if (block.rendered) {
+    block.initSvg();
+    block.render();
+  }
+}
+
+/**
+ * Create and attach a pre-configured mac_object_literal block to a value input.
+ */
+function attachObjectLiteral(parentBlock: any, input: any, keys: string[]): void {
+  const workspace = parentBlock.workspace;
+  if (!workspace) return;
+
+  const objBlock = workspace.newBlock("mac_object_literal") as any;
+
+  // Adjust property count to match keys
+  while (objBlock.propCount_ < keys.length) {
+    attachShadowExpression(objBlock.appendValueInput(`VAL${objBlock.propCount_}`)
+      .appendField(new Blockly.FieldTextInput("key"), `KEY${objBlock.propCount_}`)
+      .appendField(":"));
+    objBlock.propCount_++;
+  }
+  while (objBlock.propCount_ > keys.length && objBlock.propCount_ > 0) {
+    objBlock.propCount_--;
+    objBlock.removeInput(`VAL${objBlock.propCount_}`);
+  }
+
+  // Set key names
+  for (let i = 0; i < keys.length; i++) {
+    objBlock.setFieldValue(keys[i], `KEY${i}`);
+  }
+
+  objBlock.initSvg?.();
+  if (input.connection && objBlock.outputConnection) {
+    input.connection.connect(objBlock.outputConnection);
+  }
+}
+
+/**
+ * Remove function parameter inputs from a block.
+ */
+function removeFunctionInputs(block: any, prefix: string): void {
+  for (let i = (block.paramCount_ ?? 0) - 1; i >= 0; i--) {
+    if (block.getInput(`${prefix}${i}`)) block.removeInput(`${prefix}${i}`);
+  }
+  if (block.getInput(`${prefix}CLOSE`)) block.removeInput(`${prefix}CLOSE`);
+  block.paramCount_ = 0;
+  block.isCall_ = false;
+  block.isAsync_ = false;
+}
+
+/** Default shadow state for value inputs — a minimal typeable text field */
+const SHADOW_INPUT_DEFAULT = { type: "mac_shadow_input", fields: { CODE: "" } };
+
+/**
+ * Attach a mac_shadow_input shadow block to a value input's connection.
+ * The shadow provides a bare text field where the user can type directly,
+ * and is automatically replaced when a real block is dragged onto the input.
+ */
+function attachShadowExpression(input: any, defaultText = ""): void {
+  const conn = input?.connection;
+  if (!conn) return;
+  // Don't overwrite if a real block is already connected
+  if (conn.targetBlock()?.isShadow() === false) return;
+  const shadow = defaultText
+    ? { type: "mac_shadow_input", fields: { CODE: defaultText } }
+    : SHADOW_INPUT_DEFAULT;
+  conn.setShadowState(shadow);
+}
+
+/**
+ * Collect function parameter values from a block for code generation.
+ */
+function collectFunctionParams(block: any, prefix: string): string {
+  const paramValues: string[] = [];
+  for (let i = 0; i < (block.paramCount_ ?? 0); i++) {
+    const val = javascriptGenerator.valueToCode(block, `${prefix}${i}`, Order.NONE);
+    if (val) paramValues.push(val);
+    else paramValues.push("undefined");
+  }
+  // Trim trailing "undefined" from optional params
+  while (paramValues.length > 0 && paramValues[paramValues.length - 1] === "undefined") {
+    paramValues.pop();
+  }
+  return paramValues.join(", ");
+}
+
+/**
+ * Try to resolve a dead-end subpath via the root completion tree.
+ * Walks backward through selections to find a root-level entry
+ * that has the remaining subpath with children.
+ */
+function resolveViaRootTreeWalk(
+  selections: string[],
+  deadEndIndex: number
+): CompletionNode | null {
+  if (!rootTree) return null;
+  for (let j = deadEndIndex; j >= 0; j--) {
+    const rootEntry = rootTree[selections[j]];
+    if (!rootEntry) continue;
+    const rootChildren = getEffectiveChildren(rootEntry);
+    if (!rootChildren) continue;
+    let node: CompletionNode = rootChildren;
+    let ok = true;
+    for (let k = j + 1; k <= deadEndIndex; k++) {
+      const sub = node[selections[k]];
+      if (!sub) { ok = false; break; }
+      let subChildren = getEffectiveChildren(sub);
+      if (!subChildren) {
+        if (sub.detail) {
+          const typeResolved = resolveViaType(sub.detail);
+          if (typeResolved) { node = typeResolved; continue; }
+        }
+        ok = false;
+        break;
+      }
+      node = subChildren;
+    }
+    if (ok && node && Object.keys(node).length > 0) {
+      return node;
+    }
+  }
+  return null;
+}
+
+/**
+ * Register a function/method block from a completion entry.
+ * Creates both the block definition and the JavaScript generator.
+ */
+export function registerFunctionBlock(path: string, entry: CompletionEntry): string | null {
+  const blockType = pathToBlockType(path);
+  if (registeredBlocks.has(blockType)) return blockType;
+
+  const params = parseParams(entry.detail ?? "");
+  const requiredParams = params.filter((p) => !p.optional);
+  const optionalParams = params.filter((p) => p.optional);
+
+  // Determine if this returns a value (has => in detail)
+  const hasReturn = entry.detail?.includes("=>") ?? false;
+  const isAsync = entry.detail?.includes("Promise") ?? false;
+
+  // Build the block definition
+  const args: any[] = [];
+  let messageIndex = 0;
+  let messageParts: string[] = [path];
+
+  // Add required parameter inputs
+  for (const param of requiredParams) {
+    messageParts.push(`${param.name} %${++messageIndex}`);
+    args.push({
+      type: "input_value",
+      name: `PARAM_${param.name.toUpperCase()}`,
+    });
+  }
+
+  // Optional params as a single input (simplified)
+  if (optionalParams.length > 0) {
+    messageParts.push(`options %${++messageIndex}`);
+    args.push({
+      type: "input_value",
+      name: "OPTIONS",
+    });
+  }
+
+  const blockDef: any = {
+    type: blockType,
+    message0: messageParts.join(" "),
+    args0: args.length > 0 ? args : undefined,
+    colour: getColourForPath(path),
+    tooltip: entry.info ?? entry.detail ?? "",
+    helpUrl: "",
+    extensions: args.length > 0 ? ["mac_shadow_values"] : undefined,
+  };
+
+  if (hasReturn) {
+    blockDef.output = null; // Can connect to any value input
+  } else {
+    blockDef.previousStatement = null;
+    blockDef.nextStatement = null;
+  }
+
+  try {
+    Blockly.common.defineBlocksWithJsonArray([blockDef]);
+  } catch (err) {
+    console.error(`macro-autocomplete | Blockly: Failed to define block ${blockType}:`, err);
+    return null;
+  }
+
+  // Register the JavaScript generator
+  javascriptGenerator.forBlock[blockType] = function (block: Blockly.Block) {
+    const paramValues: string[] = [];
+    for (const param of requiredParams) {
+      const val = javascriptGenerator.valueToCode(
+        block,
+        `PARAM_${param.name.toUpperCase()}`,
+        Order.NONE
+      );
+      paramValues.push(val || "undefined");
+    }
+    if (optionalParams.length > 0) {
+      const optVal = javascriptGenerator.valueToCode(block, "OPTIONS", Order.NONE);
+      if (optVal) paramValues.push(optVal);
+    }
+
+    const code = `${isAsync ? "await " : ""}${path}(${paramValues.join(", ")})`;
+    if (hasReturn) {
+      return [code, Order.AWAIT];
+    } else {
+      return code + ";\n";
+    }
+  };
+
+  registeredBlocks.add(blockType);
+  if (isAsync) asyncBlockTypes.add(blockType);
+  return blockType;
+}
+
+/**
+ * Register a property/variable access block.
+ * Creates a value block that outputs the property path.
+ */
+export function registerPropertyBlock(path: string, entry: CompletionEntry): string | null {
+  const blockType = pathToBlockType(path);
+  if (registeredBlocks.has(blockType)) return blockType;
+
+  const blockDef: any = {
+    type: blockType,
+    message0: path,
+    output: null,
+    colour: getColourForPath(path),
+    tooltip: entry.info ?? entry.detail ?? path,
+    helpUrl: "",
+  };
+
+  try {
+    Blockly.common.defineBlocksWithJsonArray([blockDef]);
+  } catch (err) {
+    console.error(`macro-autocomplete | Blockly: Failed to define property block ${blockType}:`, err);
+    return null;
+  }
+
+  javascriptGenerator.forBlock[blockType] = function () {
+    return [path, Order.MEMBER];
+  };
+
+  registeredBlocks.add(blockType);
+  return blockType;
+}
+
+/**
+ * Register a namespace access block with dropdown for child selection.
+ * For objects like `game.settings` where children are methods/properties.
+ */
+export function registerNamespaceBlock(
+  path: string,
+  entry: CompletionEntry,
+  children: CompletionNode
+): string | null {
+  const blockType = pathToBlockType(path) + "_ns";
+  if (registeredBlocks.has(blockType)) return blockType;
+
+  const childKeys = filteredKeys(children);
+  if (childKeys.length === 0) return null;
+  if (childKeys.length > MAX_BLOCKS_PER_CATEGORY) {
+    childKeys.length = MAX_BLOCKS_PER_CATEGORY;
+  }
+
+  const label = path.split(".").pop() ?? path;
+  const initialOptions: [string, string][] = [
+    SELF_OPTION,
+    ...childKeys.map((k) => [k, k] as [string, string]),
+  ];
+  const colour = getColourForPath(path);
+
+  /** Get children at a chain of selections, delegating to module-level walkSelections */
+  function getChildrenAt(selections: string[]): CompletionNode | null {
+    return walkSelections(children, selections);
+  }
+
+  /** Remove chain fields from `fromIndex+1` onward from the CHAIN_0 input */
+  function removeChainFields(block: any, fromIndex: number): void {
+    const input = block.getInput("CHAIN_0");
+    if (!input) return;
+    for (let i = block.chainDepth_ ?? 0; i > fromIndex; i--) {
+      const dotField = input.fieldRow.find((f: any) => f.name === `DOT_${i}`);
+      if (dotField) input.removeField(`DOT_${i}`);
+      const propField = input.fieldRow.find((f: any) => f.name === `PROP_${i}`);
+      if (propField) input.removeField(`PROP_${i}`);
+    }
+  }
+
+  /** Append a dot + dropdown to the CHAIN_0 input at the given index */
+  function appendChainDropdown(block: any, index: number, options: [string, string][]): void {
+    const input = block.getInput("CHAIN_0");
+    if (!input) return;
+    const capturedIndex = index;
+    input
+      .appendField(". ", `DOT_${index}`)
+      .appendField(
+        new Blockly.FieldDropdown(options, function (
+          this: any,
+          newValue: string
+        ) {
+          const src = this.getSourceBlock();
+          if (src && !src.isInFlyout && !src.loading_) {
+            setTimeout(() => rebuildChain(src, capturedIndex), 0);
+          }
+          return newValue;
+        }),
+        `PROP_${index}`
+      );
+  }
+
+  /** Rebuild the dropdown chain from `fromIndex` onward */
+  function rebuildChain(block: any, fromIndex: number): void {
+    // Remove all chain fields after fromIndex
+    removeChainFields(block, fromIndex);
+    block.chainDepth_ = fromIndex;
+
+    // Remove any function parameter inputs from previous selection
+    removeFunctionInputs(block, "FPARAM_");
+
+    // Collect real selections (skip sentinel) up to and including fromIndex
+    const selections: string[] = [];
+    for (let i = 0; i <= fromIndex; i++) {
+      const val = block.getFieldValue(`PROP_${i}`);
+      if (val != null && val !== SELF_VALUE) selections.push(val);
+    }
+
+    // If the last dropdown selected the sentinel, stop — user wants the path as-is
+    const lastVal = block.getFieldValue(`PROP_${fromIndex}`);
+    if (lastVal === SELF_VALUE) {
+      if (block.rendered) { block.initSvg(); block.render(); }
+      return;
+    }
+
+    // Check if the terminal selection is a function/method
+    const terminalEntry = walkToEntry(children, selections);
+    if (terminalEntry && (terminalEntry.type === "function" || terminalEntry.type === "method")) {
+      addFunctionInputs(block, terminalEntry, "FPARAM_");
+      return;
+    }
+
+    // If the selected child has its own children, add a new dropdown
+    const nextChildren = getChildrenAt(selections);
+    if (nextChildren) {
+      const keys = filteredKeys(nextChildren);
+      if (keys.length > 0) {
+        const nextIndex = fromIndex + 1;
+        const options: [string, string][] = [
+          SELF_OPTION,
+          ...keys.map((k) => [k, k] as [string, string]),
+        ];
+        appendChainDropdown(block, nextIndex, options);
+        block.chainDepth_ = nextIndex;
+      }
+    }
+
+    // Re-render the block if it is already on the workspace
+    if (block.rendered) {
+      block.initSvg();
+      block.render();
+    }
+  }
+
+  // Define the block with dynamic cascading dropdowns
+  Blockly.Blocks[blockType] = {
+    init: function (this: any) {
+      this.chainDepth_ = 0;
+      this.loading_ = false;
+      this.appendDummyInput("CHAIN_0")
+        .appendField(`${label} .`)
+        .appendField(
+          new Blockly.FieldDropdown(initialOptions, function (
+            this: any,
+            newValue: string
+          ) {
+            const src = this.getSourceBlock();
+            if (src && !src.isInFlyout && !src.loading_) {
+              setTimeout(() => rebuildChain(src, 0), 0);
+            }
+            return newValue;
+          }),
+          "PROP_0"
+        );
+      this.setOutput(true, null);
+      this.setColour(colour);
+      this.setTooltip(entry.info ?? `Access ${path} properties`);
+    },
+
+    saveExtraState: function (this: any) {
+      const selections: string[] = [];
+      for (let i = 0; i <= (this.chainDepth_ ?? 0); i++) {
+        const val = this.getFieldValue(`PROP_${i}`);
+        if (val == null || val === SELF_VALUE) break;
+        selections.push(val);
+      }
+      // Only save extra state when there are cascaded selections
+      return selections.length > 1 ? { selections } : {};
+    },
+
+    loadExtraState: function (this: any, state: any) {
+      if (!state?.selections || state.selections.length <= 1) return;
+      this.loading_ = true;
+      try {
+        // Set first dropdown value
+        this.setFieldValue(state.selections[0], "PROP_0");
+        // Build remaining cascaded dropdowns
+        for (let i = 1; i < state.selections.length; i++) {
+          const prevSelections = state.selections.slice(0, i);
+          const nextChildren = getChildrenAt(prevSelections);
+          if (!nextChildren) break;
+          const keys = filteredKeys(nextChildren);
+          if (keys.length === 0) break;
+          const options: [string, string][] = [
+            SELF_OPTION,
+            ...keys.map((k) => [k, k] as [string, string]),
+          ];
+          appendChainDropdown(this, i, options);
+          this.setFieldValue(state.selections[i], `PROP_${i}`);
+          this.chainDepth_ = i;
+        }
+        // If the terminal selection is a function, add parameter inputs
+        const realSelections = state.selections.filter((s: string) => s !== SELF_VALUE);
+        const terminalEntry = walkToEntry(children, realSelections);
+        if (terminalEntry && (terminalEntry.type === "function" || terminalEntry.type === "method")) {
+          addFunctionInputs(this, terminalEntry, "FPARAM_");
+        }
+      } finally {
+        // Defer clearing loading_ so it stays true through Blockly's
+        // loadFields phase (which runs after loadExtraState during
+        // deserialization). loadFields restores PROP_0's value and would
+        // trigger the dropdown validator — if loading_ were already false
+        // the validator would schedule rebuildChain via setTimeout and
+        // destroy the cascade we just built.
+        setTimeout(() => { this.loading_ = false; }, 0);
+      }
+    },
+  };
+
+  // JavaScript code generator — join all selected chain values
+  javascriptGenerator.forBlock[blockType] = function (block: any) {
+    const parts: string[] = [path];
+    for (let i = 0; i <= (block.chainDepth_ ?? 0); i++) {
+      const val = block.getFieldValue(`PROP_${i}`);
+      if (!val || val === SELF_VALUE) break;
+      parts.push(val);
+    }
+    // Use bracket notation for numeric path segments (array indices)
+    let accessPath = parts[0];
+    for (let p = 1; p < parts.length; p++) {
+      if (/^\d+$/.test(parts[p])) {
+        accessPath += `[${parts[p]}]`;
+      } else {
+        accessPath += `.${parts[p]}`;
+      }
+    }
+
+    if (block.isCall_) {
+      const args = collectFunctionParams(block, "FPARAM_");
+      const code = `${block.isAsync_ ? "await " : ""}${accessPath}(${args})`;
+      return [code, block.isAsync_ ? Order.AWAIT : Order.FUNCTION_CALL];
+    }
+    return [accessPath, Order.MEMBER];
+  };
+
+  registeredBlocks.add(blockType);
+  return blockType;
+}
+
+/**
+ * Walk the completion tree and register blocks for all entries.
+ * Returns a map of category name → block type names for toolbox building.
+ */
+export function registerBlocksFromTree(
+  tree: CompletionNode,
+  prefix = "",
+  depth = 0,
+  category = ""
+): Map<string, string[]> {
+  const categories = new Map<string, string[]>();
+
+  // Store the root tree reference on the first call (depth 0)
+  if (depth === 0) {
+    rootTree = tree;
+    setCompletionTree(tree);
+  }
+
+  if (depth > MAX_DEPTH) return categories;
+
+  for (const [key, entry] of Object.entries(tree)) {
+    if (key.startsWith("#")) continue;
+    // Skip _-prefixed sub-properties (private members), but allow top-level
+    // tree variables like _token which are intentionally registered.
+    if (key.startsWith("_") && depth > 0) continue;
+
+    const path = prefix ? `${prefix}.${key}` : key;
+    const cat = category || key;
+
+    if (!categories.has(cat)) categories.set(cat, []);
+    const catBlocks = categories.get(cat)!;
+
+    const entryType = entry.type ?? "";
+
+    // Functions and methods get callable blocks
+    if (entryType === "function" || entryType === "method") {
+      const blockType = registerFunctionBlock(path, entry);
+      if (blockType && catBlocks.length < MAX_BLOCKS_PER_CATEGORY) {
+        catBlocks.push(blockType);
+      }
+    }
+    // Properties and variables get value blocks
+    else if (entryType === "property" || entryType === "variable") {
+      // If it has children, register as a namespace dropdown instead.
+      // Merge children (schema properties) and instanceChildren (prototype methods)
+      // so both are accessible in the dropdown.
+      const children = getEffectiveChildren(entry);
+      if (children && Object.keys(children).length > 0 && depth < MAX_DEPTH) {
+        const nsBlockType = registerNamespaceBlock(path, entry, children);
+        if (nsBlockType && catBlocks.length < MAX_BLOCKS_PER_CATEGORY) {
+          catBlocks.push(nsBlockType);
+        }
+        // Recurse into children to register deeper blocks (for the JS parser),
+        // but don't add them to this category's toolbox — the namespace dropdown
+        // already provides access. Pass "" as category so sub-blocks aren't
+        // merged back into the parent (e.g., workflow.actor.getFlag stays out
+        // of the Workflow category).
+        registerBlocksFromTree(children, path, depth + 1, "");
+      } else {
+        const blockType = registerPropertyBlock(path, entry);
+        if (blockType && catBlocks.length < MAX_BLOCKS_PER_CATEGORY) {
+          catBlocks.push(blockType);
+        }
+      }
+    }
+    // Classes get both static namespace and constructor blocks
+    else if (entryType === "class") {
+      if (entry.staticChildren && Object.keys(entry.staticChildren).length > 0) {
+        const nsBlockType = registerNamespaceBlock(path, entry, entry.staticChildren);
+        if (nsBlockType && catBlocks.length < MAX_BLOCKS_PER_CATEGORY) {
+          catBlocks.push(nsBlockType);
+        }
+      }
+      // Register static methods as individual function blocks
+      if (entry.staticChildren) {
+        for (const [methodName, methodEntry] of Object.entries(entry.staticChildren)) {
+          if (methodEntry.type === "function" || methodEntry.type === "method") {
+            const blockType = registerFunctionBlock(`${path}.${methodName}`, methodEntry);
+            if (blockType && catBlocks.length < MAX_BLOCKS_PER_CATEGORY) {
+              catBlocks.push(blockType);
+            }
+          }
+        }
+      }
+    }
+    // Objects with children — recurse
+    else if (entryType === "object" || (!entryType && entry.children)) {
+      const children = getEffectiveChildren(entry) ?? entry.children ?? {};
+      if (Object.keys(children).length > 0 && depth < MAX_DEPTH) {
+        const nsBlockType = registerNamespaceBlock(path, entry, children);
+        if (nsBlockType && catBlocks.length < MAX_BLOCKS_PER_CATEGORY) {
+          catBlocks.push(nsBlockType);
+        }
+        // At depth 0 (top-level objects like MidiQOL, game), recurse with the
+        // current category so direct children appear in the toolbox category.
+        // Categories with namespaceOnly show only the namespace dropdown block.
+        // At deeper levels, don't merge sub-blocks into the parent category.
+        const catConfig = getCategoryConfig(cat);
+        if (depth === 0 && !catConfig?.namespaceOnly) {
+          const subCats = registerBlocksFromTree(children, path, depth + 1, cat);
+          for (const [subCat, subBlocks] of subCats) {
+            const existing = categories.get(subCat) ?? [];
+            categories.set(subCat, [...existing, ...subBlocks]);
+          }
+        } else {
+          registerBlocksFromTree(children, path, depth + 1, "");
+        }
+      }
+    }
+  }
+
+  // At the top level, merge registered category keys into the scope category
+  // so they appear alongside scope.xxx blocks.
+  const mergeKeys = getScopeMergeKeys();
+  if (depth === 0 && mergeKeys.length > 0) {
+    const scopeBlocks = categories.get("scope");
+    if (scopeBlocks) {
+      for (const key of mergeKeys) {
+        const keyBlocks = categories.get(key);
+        if (keyBlocks) {
+          scopeBlocks.push(...keyBlocks);
+        }
+      }
+    }
+  }
+
+  return categories;
+}
+
+// getColourForPath imported from ./blocklyConfig
+
+/**
+ * Look up a variable's type from the completion tree.
+ * For example, getVariableType("actor") might return "Actor5e".
+ * Returns null if the variable isn't in the tree or has no type info.
+ */
+export function getVariableType(varName: string): string | null {
+  if (!rootTree) return null;
+  const entry = rootTree[varName];
+  if (!entry) return null;
+  return extractTypeName(entry.detail ?? "");
+}
+
+/**
+ * Clear all registered blocks (for rebuilding after tree changes).
+ */
+export function clearRegisteredBlocks(): void {
+  registeredBlocks.clear();
+  asyncBlockTypes.clear();
+  rootTree = null;
+}
+
+/**
+ * Register built-in logic/control blocks that are always available.
+ * These complement the tree-generated blocks with standard programming constructs.
+ */
+export function registerBuiltinBlocks(): void {
+  // Register extension that attaches mac_shadow_input shadows to all value inputs
+  if (!Blockly.Extensions.isRegistered("mac_shadow_values")) {
+    Blockly.Extensions.register("mac_shadow_values", function(this: any) {
+      for (const input of this.inputList) {
+        if (input.type === Blockly.inputs.inputTypes.VALUE) {
+          attachShadowExpression(input);
+        }
+      }
+    });
+  }
+
+  // "await expression" wrapper block
+  const awaitType = "mac_await";
+  if (!registeredBlocks.has(awaitType)) {
+    Blockly.common.defineBlocksWithJsonArray([
+      {
+        type: awaitType,
+        message0: "await %1",
+        args0: [{ type: "input_value", name: "EXPRESSION" }],
+        output: null,
+        colour: 290,
+        tooltip: "Await an async expression",
+        extensions: ["mac_shadow_values"],
+      },
+    ]);
+    javascriptGenerator.forBlock[awaitType] = function (block: Blockly.Block) {
+      const expr = javascriptGenerator.valueToCode(block, "EXPRESSION", Order.AWAIT);
+      // If the inner block already emits `await` (async function/namespace blocks
+      // set isAsync_ = true), skip adding a duplicate.
+      const innerBlock = block.getInputTargetBlock("EXPRESSION");
+      if ((innerBlock as any)?.isAsync_) {
+        return [expr, Order.AWAIT];
+      }
+      return [`await ${expr}`, Order.AWAIT];
+    };
+    registeredBlocks.add(awaitType);
+  }
+
+  // "raw JavaScript expression" block — escape hatch for anything not covered by blocks
+  const rawExprType = "mac_raw_expression";
+  if (!registeredBlocks.has(rawExprType)) {
+    Blockly.common.defineBlocksWithJsonArray([
+      {
+        type: rawExprType,
+        message0: "JS expr: %1",
+        args0: [{ type: "field_input", name: "CODE", text: "" }],
+        output: null,
+        colour: 180,
+        tooltip: "A raw JavaScript expression (returns a value)",
+      },
+    ]);
+    javascriptGenerator.forBlock[rawExprType] = function (block: Blockly.Block) {
+      const code = block.getFieldValue("CODE");
+      return [code, Order.ATOMIC];
+    };
+    registeredBlocks.add(rawExprType);
+  }
+
+  // Minimal shadow-only block — bare text field, no label.
+  // Used as the default shadow in value inputs so they're directly typeable.
+  // Dragging a real block onto the input replaces it; deleting restores it.
+  const shadowInputType = "mac_shadow_input";
+  if (!registeredBlocks.has(shadowInputType)) {
+    Blockly.common.defineBlocksWithJsonArray([
+      {
+        type: shadowInputType,
+        message0: "%1",
+        args0: [{ type: "field_input", name: "CODE", text: "" }],
+        output: null,
+        colour: 180,
+        tooltip: "Type a JavaScript expression, or drag a block here",
+      },
+    ]);
+    javascriptGenerator.forBlock[shadowInputType] = function (block: Blockly.Block) {
+      const code = block.getFieldValue("CODE");
+      return [code, Order.ATOMIC];
+    };
+    registeredBlocks.add(shadowInputType);
+  }
+
+  // "raw JavaScript statement" block — escape hatch for statements
+  const rawStmtType = "mac_raw_statement";
+  if (!registeredBlocks.has(rawStmtType)) {
+    Blockly.common.defineBlocksWithJsonArray([
+      {
+        type: rawStmtType,
+        message0: "JS: %1",
+        args0: [{ type: "field_input", name: "CODE", text: "" }],
+        previousStatement: null,
+        nextStatement: null,
+        colour: 180,
+        tooltip: "A raw JavaScript statement",
+      },
+    ]);
+    javascriptGenerator.forBlock[rawStmtType] = function (block: Blockly.Block) {
+      const code = block.getFieldValue("CODE");
+      return code + ";\n";
+    };
+    registeredBlocks.add(rawStmtType);
+  }
+
+  // "comment" block — preserves JS comments in the visual editor
+  const commentType = "mac_comment";
+  if (!registeredBlocks.has(commentType)) {
+    Blockly.Blocks[commentType] = {
+      init(this: any) {
+        this.appendDummyInput()
+          .appendField("//")
+          .appendField(new Blockly.FieldTextInput("comment"), "TEXT");
+        this.setPreviousStatement(true, null);
+        this.setNextStatement(true, null);
+        this.setColour(60);
+        this.setTooltip("A comment (preserved in generated code)");
+      },
+    };
+    javascriptGenerator.forBlock[commentType] = function (block: Blockly.Block) {
+      const text = block.getFieldValue("TEXT") ?? "";
+      // Multi-line comments use block comment syntax
+      if (text.includes("\n")) {
+        return `/* ${text} */\n`;
+      }
+      return `// ${text}\n`;
+    };
+    registeredBlocks.add(commentType);
+  }
+
+  // "expression statement" wrapper — wraps any value block as a standalone statement.
+  // Needed because function calls like MidiQOL.warn() are value blocks (they could
+  // return something) but can also be used as standalone statements.
+  const exprStmtType = "mac_expr_statement";
+  if (!registeredBlocks.has(exprStmtType)) {
+    Blockly.Blocks[exprStmtType] = {
+      init(this: any) {
+        const input = this.appendValueInput("EXPR")
+          .appendField("do");
+        this.setPreviousStatement(true, null);
+        this.setNextStatement(true, null);
+        this.setColour(180);
+        this.setTooltip("Execute an expression as a statement (discard the return value)");
+        attachShadowExpression(input);
+      },
+    };
+    javascriptGenerator.forBlock[exprStmtType] = function (block: Blockly.Block) {
+      const expr = javascriptGenerator.valueToCode(block, "EXPR", Order.NONE);
+      if (!expr) return "";
+      return expr + ";\n";
+    };
+    registeredBlocks.add(exprStmtType);
+  }
+
+  // Override standard logic_compare to generate === and !== instead of == and !=
+  const COMPARE_OPS: Record<string, string> = {
+    EQ: "===", NEQ: "!==", LT: "<", LTE: "<=", GT: ">", GTE: ">=",
+  };
+  javascriptGenerator.forBlock["logic_compare"] = function (block: Blockly.Block) {
+    const op = COMPARE_OPS[block.getFieldValue("OP")] ?? "===";
+    const order = (op === "===" || op === "!==") ? Order.EQUALITY : Order.RELATIONAL;
+    const left = javascriptGenerator.valueToCode(block, "A", order) || "0";
+    const right = javascriptGenerator.valueToCode(block, "B", order) || "0";
+    return [`${left} ${op} ${right}`, order];
+  };
+
+  // Override lists_create_with with +/- buttons for adding/removing items
+  // Replaces the built-in mutator gear with simpler plus/minus controls
+  const listCreateType = "mac_list_create";
+  if (!registeredBlocks.has(listCreateType)) {
+    Blockly.Blocks[listCreateType] = {
+      itemCount_: 2,
+      init(this: any) {
+        this.setColour("#745ba5");
+        this.setOutput(true, "Array");
+        this.setTooltip("Create a list with items");
+        this.appendDummyInput("HEADER")
+          .appendField("list")
+          .appendField(new Blockly.FieldImage(PLUS_IMAGE, 15, 15, "+", () => this.addInput_()))
+          .appendField(new Blockly.FieldImage(MINUS_IMAGE, 15, 15, "−", () => this.removeInput_()));
+        for (let i = 0; i < this.itemCount_; i++) {
+          attachShadowExpression(this.appendValueInput(`ADD${i}`));
+        }
+      },
+      addInput_(this: any) {
+        const input = this.appendValueInput(`ADD${this.itemCount_}`);
+        attachShadowExpression(input);
+        this.itemCount_++;
+      },
+      removeInput_(this: any) {
+        if (this.itemCount_ <= 0) return;
+        this.itemCount_--;
+        this.removeInput(`ADD${this.itemCount_}`);
+      },
+      saveExtraState(this: any) {
+        return { itemCount: this.itemCount_ };
+      },
+      loadExtraState(this: any, state: any) {
+        const target = state?.itemCount ?? 2;
+        while (this.itemCount_ < target) {
+          attachShadowExpression(this.appendValueInput(`ADD${this.itemCount_}`));
+          this.itemCount_++;
+        }
+        while (this.itemCount_ > target && this.itemCount_ > 0) {
+          this.itemCount_--;
+          this.removeInput(`ADD${this.itemCount_}`);
+        }
+      },
+    };
+    javascriptGenerator.forBlock[listCreateType] = function (block: any) {
+      const items: string[] = [];
+      for (let i = 0; i < block.itemCount_; i++) {
+        const value = javascriptGenerator.valueToCode(block, "ADD" + i, Order.NONE);
+        if (value) items.push(value);
+      }
+      return [`[${items.join(", ")}]`, Order.ATOMIC];
+    };
+    registeredBlocks.add(listCreateType);
+  }
+
+  // Also override the built-in lists_create_with generator (in case standard block is used)
+  javascriptGenerator.forBlock["lists_create_with"] = function (block: any) {
+    const items: string[] = [];
+    for (let i = 0; i < (block.itemCount_ ?? 0); i++) {
+      const value = javascriptGenerator.valueToCode(block, "ADD" + i, Order.NONE);
+      if (value) items.push(value);
+    }
+    return [`[${items.join(", ")}]`, Order.ATOMIC];
+  };
+
+  // Object literal { key: value, ... } — value block with +/- for properties
+  const objectLiteralType = "mac_object_literal";
+  if (!registeredBlocks.has(objectLiteralType)) {
+    Blockly.Blocks[objectLiteralType] = {
+      propCount_: 1,
+      init(this: any) {
+        this.setColour("#7f8c8d");
+        this.setOutput(true, null);
+        this.setTooltip("Create a JavaScript object { key: value, ... }");
+        this.appendDummyInput("HEADER")
+          .appendField("object {}")
+          .appendField(new Blockly.FieldImage(PLUS_IMAGE, 15, 15, "+", () => this.addProp_()))
+          .appendField(new Blockly.FieldImage(MINUS_IMAGE, 15, 15, "−", () => this.removeProp_()));
+        attachShadowExpression(this.appendValueInput("VAL0").appendField(new Blockly.FieldTextInput("key"), "KEY0").appendField(":"));
+      },
+      addProp_(this: any) {
+        const input = this.appendValueInput(`VAL${this.propCount_}`)
+          .appendField(new Blockly.FieldTextInput("key"), `KEY${this.propCount_}`)
+          .appendField(":");
+        attachShadowExpression(input);
+        this.propCount_++;
+      },
+      removeProp_(this: any) {
+        if (this.propCount_ <= 0) return;
+        this.propCount_--;
+        this.removeInput(`VAL${this.propCount_}`);
+      },
+      saveExtraState(this: any) {
+        const keys: string[] = [];
+        for (let i = 0; i < this.propCount_; i++) {
+          keys.push(this.getFieldValue(`KEY${i}`) ?? "key");
+        }
+        return { propCount: this.propCount_, keys };
+      },
+      loadExtraState(this: any, state: any) {
+        const target = state?.propCount ?? 1;
+        const keys: string[] = state?.keys ?? [];
+        while (this.propCount_ < target) {
+          attachShadowExpression(this.appendValueInput(`VAL${this.propCount_}`)
+            .appendField(new Blockly.FieldTextInput(keys[this.propCount_] ?? "key"), `KEY${this.propCount_}`)
+            .appendField(":"));
+          this.propCount_++;
+        }
+        while (this.propCount_ > target && this.propCount_ > 0) {
+          this.propCount_--;
+          this.removeInput(`VAL${this.propCount_}`);
+        }
+        // Set key values for existing inputs
+        for (let i = 0; i < Math.min(target, keys.length); i++) {
+          const field = this.getField(`KEY${i}`);
+          if (field && keys[i]) field.setValue(keys[i]);
+        }
+      },
+    };
+    javascriptGenerator.forBlock[objectLiteralType] = function (block: any) {
+      const props: string[] = [];
+      for (let i = 0; i < block.propCount_; i++) {
+        const key = block.getFieldValue(`KEY${i}`) ?? "key";
+        const val = javascriptGenerator.valueToCode(block, `VAL${i}`, Order.NONE);
+        // Quote key if it's not a valid identifier
+        const quotedKey = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(key) ? key : JSON.stringify(key);
+        props.push(`${quotedKey}: ${val || "undefined"}`);
+      }
+      // Single property stays inline; multiple properties get nested with indentation
+      if (props.length <= 1) {
+        return [`{${props[0] ? ` ${props[0]} ` : ""}}`, Order.ATOMIC];
+      }
+      const inner = props.map((p) => `  ${p}`).join(",\n");
+      return [`{\n${inner}\n}`, Order.ATOMIC];
+    };
+    registeredBlocks.add(objectLiteralType);
+  }
+
+  // "template literal" block for chat messages
+  const templateType = "mac_template_literal";
+  if (!registeredBlocks.has(templateType)) {
+    Blockly.common.defineBlocksWithJsonArray([
+      {
+        type: templateType,
+        message0: "template ` %1 `",
+        args0: [{ type: "field_input", name: "TEMPLATE", text: "" }],
+        output: "String",
+        colour: 160,
+        tooltip: "A template literal string (use ${expr} for interpolation)",
+      },
+    ]);
+    javascriptGenerator.forBlock[templateType] = function (block: Blockly.Block) {
+      const template = block.getFieldValue("TEMPLATE");
+      return ["`" + template + "`", Order.ATOMIC];
+    };
+    registeredBlocks.add(templateType);
+  }
+
+  // console.error / console.log / console.warn — value blocks with multi-arg +/-
+  // Used as statements via the mac_expr_statement ("do") wrapper
+  for (const method of ["error", "log", "warn"]) {
+    const blockType = `mac_console_${method}`;
+    if (registeredBlocks.has(blockType)) continue;
+    Blockly.Blocks[blockType] = {
+      argCount_: 1,
+      init(this: any) {
+        this.setColour(0);
+        this.setOutput(true, null);
+        this.setTooltip(`console.${method}()`);
+        this.appendDummyInput("HEADER")
+          .appendField(`console.${method}`)
+          .appendField(new Blockly.FieldImage(PLUS_IMAGE, 15, 15, "+", () => this.addArg_()))
+          .appendField(new Blockly.FieldImage(MINUS_IMAGE, 15, 15, "−", () => this.removeArg_()));
+        attachShadowExpression(this.appendValueInput("ARG0"));
+      },
+      addArg_(this: any) {
+        const input = this.appendValueInput(`ARG${this.argCount_}`);
+        attachShadowExpression(input);
+        this.argCount_++;
+      },
+      removeArg_(this: any) {
+        if (this.argCount_ <= 1) return;
+        this.argCount_--;
+        this.removeInput(`ARG${this.argCount_}`);
+      },
+      saveExtraState(this: any) {
+        return { argCount: this.argCount_ };
+      },
+      loadExtraState(this: any, state: any) {
+        const target = state?.argCount ?? 1;
+        while (this.argCount_ < target) {
+          attachShadowExpression(this.appendValueInput(`ARG${this.argCount_}`));
+          this.argCount_++;
+        }
+      },
+    };
+    javascriptGenerator.forBlock[blockType] = function (block: any) {
+      const args: string[] = [];
+      for (let i = 0; i < block.argCount_; i++) {
+        const val = javascriptGenerator.valueToCode(block, `ARG${i}`, Order.NONE);
+        if (val) args.push(val);
+      }
+      return [`console.${method}(${args.length > 0 ? args.join(", ") : '""'})`, Order.FUNCTION_CALL];
+    };
+    registeredBlocks.add(blockType);
+  }
+
+  // ui.notifications.warn / .info / .error — value blocks with multi-arg +/-
+  // Used as statements via the mac_expr_statement ("do") wrapper
+  for (const method of ["warn", "info", "error"]) {
+    const blockType = `mac_ui_notifications_${method}`;
+    if (registeredBlocks.has(blockType)) continue;
+    Blockly.Blocks[blockType] = {
+      argCount_: 1,
+      init(this: any) {
+        this.setColour(45);
+        this.setOutput(true, null);
+        this.setTooltip(`ui.notifications.${method}()`);
+        this.appendDummyInput("HEADER")
+          .appendField(`ui.notifications.${method}`)
+          .appendField(new Blockly.FieldImage(PLUS_IMAGE, 15, 15, "+", () => this.addArg_()))
+          .appendField(new Blockly.FieldImage(MINUS_IMAGE, 15, 15, "−", () => this.removeArg_()));
+        attachShadowExpression(this.appendValueInput("ARG0"));
+      },
+      addArg_(this: any) {
+        const input = this.appendValueInput(`ARG${this.argCount_}`);
+        attachShadowExpression(input);
+        this.argCount_++;
+      },
+      removeArg_(this: any) {
+        if (this.argCount_ <= 1) return;
+        this.argCount_--;
+        this.removeInput(`ARG${this.argCount_}`);
+      },
+      saveExtraState(this: any) {
+        return { argCount: this.argCount_ };
+      },
+      loadExtraState(this: any, state: any) {
+        const target = state?.argCount ?? 1;
+        while (this.argCount_ < target) {
+          attachShadowExpression(this.appendValueInput(`ARG${this.argCount_}`));
+          this.argCount_++;
+        }
+      },
+    };
+    javascriptGenerator.forBlock[blockType] = function (block: any) {
+      const args: string[] = [];
+      for (let i = 0; i < block.argCount_; i++) {
+        const val = javascriptGenerator.valueToCode(block, `ARG${i}`, Order.NONE);
+        if (val) args.push(val);
+      }
+      return [`ui.notifications.${method}(${args.length > 0 ? args.join(", ") : '""'})`, Order.FUNCTION_CALL];
+    };
+    registeredBlocks.add(blockType);
+  }
+
+  // C-style for loop: for (let VAR = INIT; CONDITION; UPDATE) { ... }
+  const forLoopType = "mac_for_loop";
+  if (!registeredBlocks.has(forLoopType)) {
+    Blockly.common.defineBlocksWithJsonArray([
+      {
+        type: forLoopType,
+        message0: "for ( let %1 = %2 ; %3 ; %4 )",
+        args0: [
+          { type: "field_input", name: "VAR", text: "i" },
+          { type: "input_value", name: "INIT" },
+          { type: "input_value", name: "CONDITION" },
+          { type: "input_value", name: "UPDATE" },
+        ],
+        message1: "%1",
+        args1: [{ type: "input_statement", name: "DO" }],
+        inputsInline: true,
+        previousStatement: null,
+        nextStatement: null,
+        colour: 120,
+        tooltip: "C-style for loop: for (let i = 0; i < n; i++)",
+        extensions: ["mac_shadow_values"],
+      },
+    ]);
+    javascriptGenerator.forBlock[forLoopType] = function (block: Blockly.Block) {
+      const varName = block.getFieldValue("VAR") || "i";
+      const init = javascriptGenerator.valueToCode(block, "INIT", Order.NONE) || "0";
+      const condition = javascriptGenerator.valueToCode(block, "CONDITION", Order.NONE) || "";
+      const update = javascriptGenerator.valueToCode(block, "UPDATE", Order.NONE) || "";
+      const body = javascriptGenerator.statementToCode(block, "DO");
+      return `for (let ${varName} = ${init}; ${condition}; ${update}) {\n${body}}\n`;
+    };
+    registeredBlocks.add(forLoopType);
+  }
+
+  // "for...of targets" iteration block (common midi-qol pattern)
+  const forOfType = "mac_for_of";
+  if (!registeredBlocks.has(forOfType)) {
+    Blockly.common.defineBlocksWithJsonArray([
+      {
+        type: forOfType,
+        message0: "for each %1 of %2",
+        args0: [
+          { type: "field_input", name: "VAR", text: "target" },
+          { type: "input_value", name: "ITERABLE" },
+        ],
+        message1: "do %1",
+        args1: [{ type: "input_statement", name: "DO" }],
+        previousStatement: null,
+        nextStatement: null,
+        colour: 120,
+        tooltip: "Iterate over a Set or Array (e.g., workflow.targets)",
+        extensions: ["mac_shadow_values"],
+      },
+    ]);
+    javascriptGenerator.forBlock[forOfType] = function (block: Blockly.Block) {
+      const varName = block.getFieldValue("VAR");
+      const iterable = javascriptGenerator.valueToCode(block, "ITERABLE", Order.NONE);
+      const body = javascriptGenerator.statementToCode(block, "DO");
+      return `for (const ${varName} of ${iterable || "[]"}) {\n${body}}\n`;
+    };
+    registeredBlocks.add(forOfType);
+  }
+
+  // "try/catch/finally" block with optional catch and finally sections
+  const tryCatchType = "mac_try_catch";
+  if (!registeredBlocks.has(tryCatchType)) {
+    Blockly.Blocks[tryCatchType] = {
+      hasCatch_: true,
+      hasFinally_: false,
+      init(this: any) {
+        this.setColour(0);
+        this.setPreviousStatement(true);
+        this.setNextStatement(true);
+        this.setTooltip("Try/catch/finally error handling block");
+        this.appendStatementInput("TRY").appendField("try");
+        this.appendStatementInput("CATCH").appendField("catch (err)");
+        this.appendDummyInput("BUTTONS")
+          .appendField(new Blockly.FieldImage(PLUS_IMAGE, 15, 15, "+finally", () => this.toggleFinally_(true)))
+          .appendField(new Blockly.FieldImage(MINUS_IMAGE, 15, 15, "−catch", () => this.toggleCatch_()));
+      },
+      toggleCatch_(this: any, forceState?: boolean) {
+        const newState = forceState !== undefined ? forceState : !this.hasCatch_;
+        if (newState === this.hasCatch_) return;
+        if (newState) {
+          // Add catch before BUTTONS
+          this.appendStatementInput("CATCH").appendField("catch (err)");
+          this.moveInputBefore("CATCH", "BUTTONS");
+          if (this.hasFinally_) this.moveInputBefore("CATCH", "FINALLY");
+        } else {
+          // Must have at least catch or finally
+          if (!this.hasFinally_) return;
+          if (this.getInput("CATCH")) this.removeInput("CATCH");
+        }
+        this.hasCatch_ = newState;
+        if (this.rendered) { this.initSvg(); this.render(); }
+      },
+      toggleFinally_(this: any, forceState?: boolean) {
+        const newState = forceState !== undefined ? forceState : !this.hasFinally_;
+        if (newState === this.hasFinally_) return;
+        if (newState) {
+          // Add finally before BUTTONS
+          this.appendStatementInput("FINALLY").appendField("finally");
+          this.moveInputBefore("FINALLY", "BUTTONS");
+        } else {
+          // Must have at least catch or finally
+          if (!this.hasCatch_) return;
+          if (this.getInput("FINALLY")) this.removeInput("FINALLY");
+        }
+        this.hasFinally_ = newState;
+        if (this.rendered) { this.initSvg(); this.render(); }
+      },
+      saveExtraState(this: any) {
+        const state: any = {};
+        if (!this.hasCatch_) state.hasCatch = false;
+        if (this.hasFinally_) state.hasFinally = true;
+        return Object.keys(state).length > 0 ? state : {};
+      },
+      loadExtraState(this: any, state: any) {
+        if (!state) return;
+        if (state.hasFinally && !this.hasFinally_) {
+          this.toggleFinally_(true);
+        }
+        if (state.hasCatch === false && this.hasCatch_) {
+          this.toggleCatch_(false);
+        }
+      },
+    };
+    javascriptGenerator.forBlock[tryCatchType] = function (block: any) {
+      const tryBody = javascriptGenerator.statementToCode(block, "TRY");
+      let code = `try {\n${tryBody}}`;
+      if (block.hasCatch_) {
+        const catchBody = javascriptGenerator.statementToCode(block, "CATCH");
+        code += ` catch (err) {\n${catchBody}}`;
+      }
+      if (block.hasFinally_) {
+        const finallyBody = javascriptGenerator.statementToCode(block, "FINALLY");
+        code += ` finally {\n${finallyBody}}`;
+      }
+      return code + "\n";
+    };
+    registeredBlocks.add(tryCatchType);
+  }
+
+  // "const variable = value" block
+  const constType = "mac_const";
+  if (!registeredBlocks.has(constType)) {
+    Blockly.common.defineBlocksWithJsonArray([
+      {
+        type: constType,
+        message0: "const %1 = %2",
+        args0: [
+          { type: "field_input", name: "NAME", text: "myVar" },
+          { type: "input_value", name: "VALUE" },
+        ],
+        previousStatement: null,
+        nextStatement: null,
+        colour: 330,
+        tooltip: "Declare a constant variable",
+        extensions: ["mac_shadow_values"],
+      },
+    ]);
+    javascriptGenerator.forBlock[constType] = function (block: Blockly.Block) {
+      const name = block.getFieldValue("NAME");
+      const value = javascriptGenerator.valueToCode(block, "VALUE", Order.NONE);
+      return `const ${name} = ${value || "undefined"};\n`;
+    };
+    registeredBlocks.add(constType);
+  }
+
+  // "let variable = value" block
+  const letType = "mac_let";
+  if (!registeredBlocks.has(letType)) {
+    Blockly.common.defineBlocksWithJsonArray([
+      {
+        type: letType,
+        message0: "let %1 = %2",
+        args0: [
+          { type: "field_input", name: "NAME", text: "myVar" },
+          { type: "input_value", name: "VALUE" },
+        ],
+        previousStatement: null,
+        nextStatement: null,
+        colour: 330,
+        tooltip: "Declare a reassignable variable",
+        extensions: ["mac_shadow_values"],
+      },
+    ]);
+    javascriptGenerator.forBlock[letType] = function (block: Blockly.Block) {
+      const name = block.getFieldValue("NAME");
+      const value = javascriptGenerator.valueToCode(block, "VALUE", Order.NONE);
+      return `let ${name} = ${value || "undefined"};\n`;
+    };
+    registeredBlocks.add(letType);
+  }
+
+  // "return" block (for early returns in macros)
+  const returnType = "mac_return";
+  if (!registeredBlocks.has(returnType)) {
+    Blockly.common.defineBlocksWithJsonArray([
+      {
+        type: returnType,
+        message0: "return %1",
+        args0: [{ type: "input_value", name: "VALUE" }],
+        previousStatement: null,
+        colour: 330,
+        tooltip: "Return a value (exits the macro)",
+        extensions: ["mac_shadow_values"],
+      },
+    ]);
+    javascriptGenerator.forBlock[returnType] = function (block: Blockly.Block) {
+      const value = javascriptGenerator.valueToCode(block, "VALUE", Order.NONE);
+      if (value) {
+        return `return ${value};\n`;
+      }
+      return "return;\n";
+    };
+    registeredBlocks.add(returnType);
+  }
+
+  // "string literal" value block
+  const stringType = "mac_string";
+  if (!registeredBlocks.has(stringType)) {
+    Blockly.common.defineBlocksWithJsonArray([
+      {
+        type: stringType,
+        message0: "' %1 '",
+        args0: [{ type: "field_input", name: "TEXT", text: "" }],
+        output: "String",
+        colour: 160,
+        tooltip: "A text string value (single-quoted)",
+      },
+    ]);
+    javascriptGenerator.forBlock[stringType] = function (block: Blockly.Block) {
+      const text = block.getFieldValue("TEXT");
+      // Escape embedded single quotes
+      const escaped = text.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+      return [`'${escaped}'`, Order.ATOMIC];
+    };
+    registeredBlocks.add(stringType);
+  }
+
+  // "number literal" value block
+  const numberType = "mac_number";
+  if (!registeredBlocks.has(numberType)) {
+    Blockly.common.defineBlocksWithJsonArray([
+      {
+        type: numberType,
+        message0: "%1",
+        args0: [{ type: "field_number", name: "NUM", value: 0 }],
+        output: "Number",
+        colour: 230,
+        tooltip: "A numeric value",
+      },
+    ]);
+    javascriptGenerator.forBlock[numberType] = function (block: Blockly.Block) {
+      const num = block.getFieldValue("NUM");
+      return [String(num), Order.ATOMIC];
+    };
+    registeredBlocks.add(numberType);
+  }
+
+  // Multi-input string concatenation block with +/- buttons
+  const stringJoinType = "mac_string_join";
+  if (!registeredBlocks.has(stringJoinType)) {
+    Blockly.Blocks[stringJoinType] = {
+      itemCount_: 2,
+      init(this: any) {
+        this.setColour(160);
+        this.setOutput(true, null);
+        this.setTooltip("Concatenate values with +");
+        this.appendDummyInput("HEADER")
+          .appendField("join")
+          .appendField(new Blockly.FieldImage(PLUS_IMAGE, 15, 15, "+", () => this.addInput_()))
+          .appendField(new Blockly.FieldImage(MINUS_IMAGE, 15, 15, "\u2212", () => this.removeInput_()));
+        for (let i = 0; i < this.itemCount_; i++) {
+          attachShadowExpression(this.appendValueInput(`ADD${i}`));
+        }
+      },
+      addInput_(this: any) {
+        const input = this.appendValueInput(`ADD${this.itemCount_}`);
+        attachShadowExpression(input);
+        this.itemCount_++;
+      },
+      removeInput_(this: any) {
+        if (this.itemCount_ <= 2) return;
+        this.itemCount_--;
+        this.removeInput(`ADD${this.itemCount_}`);
+      },
+      saveExtraState(this: any) {
+        return { itemCount: this.itemCount_ };
+      },
+      loadExtraState(this: any, state: any) {
+        const target = state?.itemCount ?? 2;
+        while (this.itemCount_ < target) {
+          attachShadowExpression(this.appendValueInput(`ADD${this.itemCount_}`));
+          this.itemCount_++;
+        }
+        while (this.itemCount_ > target && this.itemCount_ > 0) {
+          this.itemCount_--;
+          this.removeInput(`ADD${this.itemCount_}`);
+        }
+      },
+    };
+    javascriptGenerator.forBlock[stringJoinType] = function (block: any) {
+      const parts: string[] = [];
+      for (let i = 0; i < block.itemCount_; i++) {
+        const val = javascriptGenerator.valueToCode(block, `ADD${i}`, Order.ADDITION);
+        if (val) parts.push(val);
+      }
+      if (parts.length === 0) return ['""', Order.ATOMIC];
+      if (parts.length === 1) return [parts[0], Order.ADDITION];
+      return [parts.join(" + "), Order.ADDITION];
+    };
+    registeredBlocks.add(stringJoinType);
+  }
+
+  // "if / else" control block
+  const ifElseType = "mac_if_else";
+  if (!registeredBlocks.has(ifElseType)) {
+    Blockly.common.defineBlocksWithJsonArray([
+      {
+        type: ifElseType,
+        message0: "if %1",
+        args0: [{ type: "input_value", name: "CONDITION", check: "Boolean" }],
+        message1: "then %1",
+        args1: [{ type: "input_statement", name: "THEN" }],
+        message2: "else %1",
+        args2: [{ type: "input_statement", name: "ELSE" }],
+        previousStatement: null,
+        nextStatement: null,
+        colour: 210,
+        tooltip: "If/else conditional block",
+        extensions: ["mac_shadow_values"],
+      },
+    ]);
+    javascriptGenerator.forBlock[ifElseType] = function (block: Blockly.Block) {
+      const condition = javascriptGenerator.valueToCode(block, "CONDITION", Order.NONE) || "false";
+      const thenBody = javascriptGenerator.statementToCode(block, "THEN");
+      const elseBody = javascriptGenerator.statementToCode(block, "ELSE");
+      let code = `if (${condition}) {\n${thenBody}}`;
+      if (elseBody) {
+        code += ` else {\n${elseBody}}`;
+      }
+      return code + "\n";
+    };
+    registeredBlocks.add(ifElseType);
+  }
+
+  // "compare" value block — ===, !==, >, <, >=, <=
+  const compareType = "mac_compare";
+  if (!registeredBlocks.has(compareType)) {
+    Blockly.common.defineBlocksWithJsonArray([
+      {
+        type: compareType,
+        message0: "%1 %2 %3",
+        args0: [
+          { type: "input_value", name: "LEFT" },
+          {
+            type: "field_dropdown",
+            name: "OP",
+            options: [
+              ["===", "==="], ["!==", "!=="],
+              [">", ">"], ["<", "<"],
+              [">=", ">="], ["<=", "<="],
+            ],
+          },
+          { type: "input_value", name: "RIGHT" },
+        ],
+        inputsInline: true,
+        output: "Boolean",
+        colour: 210,
+        tooltip: "Compare two values",
+        extensions: ["mac_shadow_values"],
+      },
+    ]);
+    javascriptGenerator.forBlock[compareType] = function (block: Blockly.Block) {
+      const op = block.getFieldValue("OP");
+      const order = (op === "===" || op === "!==") ? Order.EQUALITY : Order.RELATIONAL;
+      const left = javascriptGenerator.valueToCode(block, "LEFT", order) || "0";
+      const right = javascriptGenerator.valueToCode(block, "RIGHT", order) || "0";
+      return [`${left} ${op} ${right}`, order];
+    };
+    registeredBlocks.add(compareType);
+  }
+
+  // Multi-input AND block with +/- buttons
+  const logicAndType = "mac_logic_and";
+  if (!registeredBlocks.has(logicAndType)) {
+    Blockly.Blocks[logicAndType] = {
+      itemCount_: 2,
+      init(this: any) {
+        this.setColour("#5b80a5");
+        this.setOutput(true, "Boolean");
+        this.setTooltip("Logical AND — all conditions must be true");
+        this.appendDummyInput("HEADER")
+          .appendField("AND")
+          .appendField(new Blockly.FieldImage(PLUS_IMAGE, 15, 15, "+", () => this.addInput_()))
+          .appendField(new Blockly.FieldImage(MINUS_IMAGE, 15, 15, "−", () => this.removeInput_()));
+        for (let i = 0; i < this.itemCount_; i++) {
+          attachShadowExpression(this.appendValueInput(`COND${i}`));
+        }
+      },
+      addInput_(this: any) {
+        const input = this.appendValueInput(`COND${this.itemCount_}`);
+        attachShadowExpression(input);
+        this.itemCount_++;
+      },
+      removeInput_(this: any) {
+        if (this.itemCount_ <= 2) return;
+        this.itemCount_--;
+        this.removeInput(`COND${this.itemCount_}`);
+      },
+      saveExtraState(this: any) {
+        return { itemCount: this.itemCount_ };
+      },
+      loadExtraState(this: any, state: any) {
+        const target = state?.itemCount ?? 2;
+        while (this.itemCount_ < target) {
+          attachShadowExpression(this.appendValueInput(`COND${this.itemCount_}`));
+          this.itemCount_++;
+        }
+      },
+    };
+    javascriptGenerator.forBlock[logicAndType] = function (block: any) {
+      const parts: string[] = [];
+      for (let i = 0; i < block.itemCount_; i++) {
+        const val = javascriptGenerator.valueToCode(block, `COND${i}`, Order.LOGICAL_AND);
+        if (val) parts.push(val);
+      }
+      if (parts.length === 0) return ["true", Order.ATOMIC];
+      if (parts.length === 1) return [parts[0], Order.LOGICAL_AND];
+      return [parts.join(" && "), Order.LOGICAL_AND];
+    };
+    registeredBlocks.add(logicAndType);
+  }
+
+  // Multi-input OR block with +/- buttons
+  const logicOrType = "mac_logic_or";
+  if (!registeredBlocks.has(logicOrType)) {
+    Blockly.Blocks[logicOrType] = {
+      itemCount_: 2,
+      init(this: any) {
+        this.setColour("#e07020");
+        this.setOutput(true, "Boolean");
+        this.setTooltip("Logical OR — at least one condition must be true");
+        this.appendDummyInput("HEADER")
+          .appendField("OR")
+          .appendField(new Blockly.FieldImage(PLUS_IMAGE, 15, 15, "+", () => this.addInput_()))
+          .appendField(new Blockly.FieldImage(MINUS_IMAGE, 15, 15, "−", () => this.removeInput_()));
+        for (let i = 0; i < this.itemCount_; i++) {
+          attachShadowExpression(this.appendValueInput(`COND${i}`));
+        }
+      },
+      addInput_(this: any) {
+        const input = this.appendValueInput(`COND${this.itemCount_}`);
+        attachShadowExpression(input);
+        this.itemCount_++;
+      },
+      removeInput_(this: any) {
+        if (this.itemCount_ <= 2) return;
+        this.itemCount_--;
+        this.removeInput(`COND${this.itemCount_}`);
+      },
+      saveExtraState(this: any) {
+        return { itemCount: this.itemCount_ };
+      },
+      loadExtraState(this: any, state: any) {
+        const target = state?.itemCount ?? 2;
+        while (this.itemCount_ < target) {
+          attachShadowExpression(this.appendValueInput(`COND${this.itemCount_}`));
+          this.itemCount_++;
+        }
+      },
+    };
+    javascriptGenerator.forBlock[logicOrType] = function (block: any) {
+      const parts: string[] = [];
+      for (let i = 0; i < block.itemCount_; i++) {
+        const val = javascriptGenerator.valueToCode(block, `COND${i}`, Order.LOGICAL_OR);
+        if (val) parts.push(val);
+      }
+      if (parts.length === 0) return ["false", Order.ATOMIC];
+      if (parts.length === 1) return [parts[0], Order.LOGICAL_OR];
+      return [parts.join(" || "), Order.LOGICAL_OR];
+    };
+    registeredBlocks.add(logicOrType);
+  }
+
+  // "not" value block — !expression
+  const notType = "mac_not";
+  if (!registeredBlocks.has(notType)) {
+    Blockly.common.defineBlocksWithJsonArray([
+      {
+        type: notType,
+        message0: "not %1",
+        args0: [{ type: "input_value", name: "VALUE" }],
+        output: "Boolean",
+        colour: 210,
+        tooltip: "Logical NOT",
+        extensions: ["mac_shadow_values"],
+      },
+    ]);
+    javascriptGenerator.forBlock[notType] = function (block: Blockly.Block) {
+      const value = javascriptGenerator.valueToCode(block, "VALUE", Order.LOGICAL_NOT) || "false";
+      return [`!${value}`, Order.LOGICAL_NOT];
+    };
+    registeredBlocks.add(notType);
+  }
+
+  // "value in list" block — ["a", "b"].includes(expr) with inline literal array
+  const valueInListType = "mac_value_in_list";
+  if (!registeredBlocks.has(valueInListType)) {
+    Blockly.common.defineBlocksWithJsonArray([
+      {
+        type: valueInListType,
+        message0: "[ %1 ] includes %2",
+        args0: [
+          { type: "field_input", name: "ITEMS", text: "" },
+          { type: "input_value", name: "VALUE" },
+        ],
+        output: "Boolean",
+        colour: "#745ba5",
+        tooltip: 'Check if a value is in a literal list (comma-separated items, e.g. "rwak", "mwak")',
+        extensions: ["mac_shadow_values"],
+      },
+    ]);
+    javascriptGenerator.forBlock[valueInListType] = function (block: Blockly.Block) {
+      const items = block.getFieldValue("ITEMS") || "";
+      const value = javascriptGenerator.valueToCode(block, "VALUE", Order.NONE) || "undefined";
+      return [`[${items}].includes(${value})`, Order.FUNCTION_CALL];
+    };
+    registeredBlocks.add(valueInListType);
+  }
+
+  // ── Unified list/array method block — [LIST] . [method ▾] (dynamic args) ──
+  // Methods are categorised by their argument pattern:
+  //   callback: (item) => expr   — map, filter, find, some, every, findIndex, flatMap
+  //   value:    (value)          — includes, indexOf, at, join, push, concat, slice, fill
+  //   noArg:    ()               — reverse, sort, flat, first, last, pop, shift, keys, values
+  const LIST_METHOD_INFO: Record<string, "callback" | "value" | "noArg"> = {
+    map: "callback", filter: "callback", find: "callback",
+    some: "callback", every: "callback", findIndex: "callback", flatMap: "callback",
+    includes: "value", indexOf: "value", at: "value",
+    join: "value", push: "value", concat: "value", slice: "value", fill: "value",
+    reverse: "noArg", sort: "noArg", flat: "noArg",
+    first: "noArg", last: "noArg", pop: "noArg", shift: "noArg",
+    keys: "noArg", values: "noArg",
+  };
+  const LIST_METHOD_OPTIONS: [string, string][] = Object.keys(LIST_METHOD_INFO)
+    .map((k) => [k, k] as [string, string]);
+
+  const listMethodType = "mac_list_method";
+  if (!registeredBlocks.has(listMethodType)) {
+    /** Remove dynamic argument inputs from the block */
+    function removeArgInputs(block: any): void {
+      for (const name of ["ARG_OPEN", "ARG_VAR", "ARG_EXPR", "ARG_VALUE", "ARG_CLOSE", "ARG_EMPTY"]) {
+        if (block.getInput(name)) block.removeInput(name);
+      }
+    }
+
+    /** Add argument inputs matching the method's input type */
+    function addArgInputs(block: any, inputType: string): void {
+      switch (inputType) {
+        case "callback":
+          block.appendDummyInput("ARG_OPEN").appendField("(");
+          block.appendDummyInput("ARG_VAR")
+            .appendField(new Blockly.FieldTextInput(block.varName_ || "item"), "VAR")
+            .appendField("=>");
+          attachShadowExpression(block.appendValueInput("ARG_EXPR"));
+          block.appendDummyInput("ARG_CLOSE").appendField(")");
+          break;
+        case "value":
+          block.appendDummyInput("ARG_OPEN").appendField("(");
+          attachShadowExpression(block.appendValueInput("ARG_VALUE"));
+          block.appendDummyInput("ARG_CLOSE").appendField(")");
+          break;
+        case "noArg":
+          block.appendDummyInput("ARG_EMPTY").appendField("( )");
+          break;
+      }
+      block.inputType_ = inputType;
+    }
+
+    /** Rebuild argument inputs when dropdown changes */
+    function rebuildArgs(block: any, method: string): void {
+      // Preserve callback var name across rebuilds
+      if (block.inputType_ === "callback") {
+        block.varName_ = block.getFieldValue("VAR") || "item";
+      }
+      removeArgInputs(block);
+      addArgInputs(block, LIST_METHOD_INFO[method] || "noArg");
+      if (block.rendered) { block.initSvg(); block.render(); }
+    }
+
+    Blockly.Blocks[listMethodType] = {
+      inputType_: "callback",
+      varName_: "item",
+      init(this: any) {
+        this.setColour("#745ba5");
+        this.setOutput(true, null);
+        this.setTooltip("Call a method on a list/array/set");
+        attachShadowExpression(this.appendValueInput("LIST"));
+        this.appendDummyInput("METHOD")
+          .appendField(".")
+          .appendField(new Blockly.FieldDropdown(LIST_METHOD_OPTIONS, function (this: any, newValue: string) {
+            const src = this.getSourceBlock();
+            if (src && !src.isInFlyout && !src.loading_) {
+              setTimeout(() => rebuildArgs(src, newValue), 0);
+            }
+            return newValue;
+          }), "METHOD");
+        // Default inputs for "map" (callback)
+        addArgInputs(this, "callback");
+        this.setInputsInline(true);
+      },
+      saveExtraState(this: any) {
+        const state: any = { method: this.getFieldValue("METHOD") || "map" };
+        if (this.inputType_ === "callback") {
+          state.varName = this.getFieldValue("VAR") || "item";
+        }
+        return state;
+      },
+      loadExtraState(this: any, state: any) {
+        if (!state?.method) return;
+        this.loading_ = true;
+        try {
+          const method = state.method;
+          this.setFieldValue(method, "METHOD");
+          if (state.varName) this.varName_ = state.varName;
+          const newType = LIST_METHOD_INFO[method] || "noArg";
+          if (newType !== this.inputType_) {
+            removeArgInputs(this);
+            addArgInputs(this, newType);
+          }
+          if (state.varName && this.inputType_ === "callback") {
+            this.setFieldValue(state.varName, "VAR");
+          }
+        } finally {
+          setTimeout(() => { this.loading_ = false; }, 0);
+        }
+      },
+    };
+    javascriptGenerator.forBlock[listMethodType] = function (block: any) {
+      const list = javascriptGenerator.valueToCode(block, "LIST", Order.MEMBER) || "[]";
+      const method = block.getFieldValue("METHOD") || "map";
+      const inputType = LIST_METHOD_INFO[method] || "noArg";
+      switch (inputType) {
+        case "callback": {
+          const varName = block.getFieldValue("VAR") || "item";
+          const expr = javascriptGenerator.valueToCode(block, "ARG_EXPR", Order.NONE) || "undefined";
+          return [`${list}.${method}((${varName}) => ${expr})`, Order.FUNCTION_CALL];
+        }
+        case "value": {
+          const value = javascriptGenerator.valueToCode(block, "ARG_VALUE", Order.NONE) || "undefined";
+          return [`${list}.${method}(${value})`, Order.FUNCTION_CALL];
+        }
+        case "noArg":
+        default:
+          return [`${list}.${method}()`, Order.FUNCTION_CALL];
+      }
+    };
+    registeredBlocks.add(listMethodType);
+  }
+
+  // ── Array forEach — statement block with callback body ──
+  const forEachType = "mac_list_forEach";
+  if (!registeredBlocks.has(forEachType)) {
+    Blockly.Blocks[forEachType] = {
+      init(this: any) {
+        this.setColour("#745ba5");
+        this.setPreviousStatement(true);
+        this.setNextStatement(true);
+        this.setTooltip("Run code for each item in a list");
+        attachShadowExpression(this.appendValueInput("LIST"));
+        this.appendDummyInput()
+          .appendField(".forEach(")
+          .appendField(new Blockly.FieldTextInput("item"), "VAR")
+          .appendField("=> {");
+        this.appendStatementInput("BODY");
+        this.appendDummyInput().appendField("})");
+      },
+    };
+    javascriptGenerator.forBlock[forEachType] = function (block: any) {
+      const list = javascriptGenerator.valueToCode(block, "LIST", Order.MEMBER) || "[]";
+      const varName = block.getFieldValue("VAR") || "item";
+      const body = javascriptGenerator.statementToCode(block, "BODY");
+      return `${list}.forEach((${varName}) => {\n${body}});\n`;
+    };
+    registeredBlocks.add(forEachType);
+  }
+
+  // "race/type includes" block — ["humanoid", "beast"].includes(raceOrType) shorthand
+  const raceIncludesType = "mac_race_includes";
+  if (!registeredBlocks.has(raceIncludesType)) {
+    Blockly.common.defineBlocksWithJsonArray([
+      {
+        type: raceIncludesType,
+        message0: "[ %1 ] includes %2",
+        args0: [
+          { type: "field_input", name: "ITEMS", text: '"humanoid"' },
+          {
+            type: "field_dropdown",
+            name: "FIELD",
+            options: [
+              ["raceOrType", "raceOrType"],
+              ["typeOrRace", "typeOrRace"],
+              ["actor.raceOrType", "actor.raceOrType"],
+              ["target.raceOrType", "target.raceOrType"],
+              ["target.typeOrRace", "target.typeOrRace"],
+            ],
+          },
+        ],
+        inputsInline: true,
+        output: "Boolean",
+        colour: "#2a9d8f",
+        tooltip: 'Check if a creature race/type is in a list (e.g. ["humanoid", "beast"].includes(raceOrType))',
+      },
+    ]);
+    javascriptGenerator.forBlock[raceIncludesType] = function (block: Blockly.Block) {
+      const items = block.getFieldValue("ITEMS") || "";
+      const field = block.getFieldValue("FIELD") || "raceOrType";
+      return [`[${items}].includes(${field})`, Order.FUNCTION_CALL];
+    };
+    registeredBlocks.add(raceIncludesType);
+  }
+
+  // ── setTimeout / setInterval — statement blocks taking a callback + delay ──
+  // ── Utility blocks ──
+
+  // Object.keys / Object.values / Object.entries
+  for (const method of ["keys", "values", "entries"] as const) {
+    const blockType = `mac_object_${method}`;
+    if (!registeredBlocks.has(blockType)) {
+      Blockly.common.defineBlocksWithJsonArray([
+        {
+          type: blockType,
+          message0: `Object.${method}( %1 )`,
+          args0: [{ type: "input_value", name: "OBJ" }],
+          inputsInline: true,
+          output: null,
+          colour: "#a5805b",
+          tooltip: `Object.${method}() — returns an array of the object's ${method}`,
+          extensions: ["mac_shadow_values"],
+        },
+      ]);
+      javascriptGenerator.forBlock[blockType] = function (block: Blockly.Block) {
+        const obj = javascriptGenerator.valueToCode(block, "OBJ", Order.NONE) || "{}";
+        return [`Object.${method}(${obj})`, Order.FUNCTION_CALL];
+      };
+      registeredBlocks.add(blockType);
+    }
+  }
+
+  // Array.from(iterable)
+  const arrayFromType = "mac_array_from";
+  if (!registeredBlocks.has(arrayFromType)) {
+    Blockly.common.defineBlocksWithJsonArray([
+      {
+        type: arrayFromType,
+        message0: "Array.from( %1 )",
+        args0: [{ type: "input_value", name: "ITERABLE" }],
+        inputsInline: true,
+        output: null,
+        colour: "#a5805b",
+        tooltip: "Array.from() — convert a Set, Collection, or iterable to an Array",
+        extensions: ["mac_shadow_values"],
+      },
+    ]);
+    javascriptGenerator.forBlock[arrayFromType] = function (block: Blockly.Block) {
+      const iter = javascriptGenerator.valueToCode(block, "ITERABLE", Order.NONE) || "[]";
+      return [`Array.from(${iter})`, Order.FUNCTION_CALL];
+    };
+    registeredBlocks.add(arrayFromType);
+  }
+
+  // instanceof check: value instanceof Type
+  const instanceofType = "mac_instanceof";
+  if (!registeredBlocks.has(instanceofType)) {
+    Blockly.common.defineBlocksWithJsonArray([
+      {
+        type: instanceofType,
+        message0: "%1 instanceof %2",
+        args0: [
+          { type: "input_value", name: "VALUE" },
+          { type: "input_value", name: "TYPE" },
+        ],
+        inputsInline: true,
+        output: "Boolean",
+        colour: "#a5805b",
+        tooltip: "Check if a value is an instance of a class (e.g., Actor, Item, Effect)",
+        extensions: ["mac_shadow_values"],
+      },
+    ]);
+    javascriptGenerator.forBlock[instanceofType] = function (block: Blockly.Block) {
+      const value = javascriptGenerator.valueToCode(block, "VALUE", Order.RELATIONAL) || "null";
+      const type = javascriptGenerator.valueToCode(block, "TYPE", Order.RELATIONAL) || "Object";
+      return [`${value} instanceof ${type}`, Order.RELATIONAL];
+    };
+    registeredBlocks.add(instanceofType);
+  }
+
+  const setTimeoutType = "mac_setTimeout";
+  if (!registeredBlocks.has(setTimeoutType)) {
+    Blockly.Blocks[setTimeoutType] = {
+      init(this: any) {
+        this.setColour("#7f8c8d");
+        this.setPreviousStatement(true);
+        this.setNextStatement(true);
+        this.setTooltip("Run a function after a delay (milliseconds)");
+        this.appendDummyInput().appendField("setTimeout(");
+        attachShadowExpression(this.appendValueInput("CALLBACK"));
+        this.appendDummyInput().appendField(",");
+        attachShadowExpression(this.appendValueInput("DELAY"), "1000");
+        this.appendDummyInput().appendField(")");
+        this.setInputsInline(true);
+      },
+    };
+    javascriptGenerator.forBlock[setTimeoutType] = function (block: any) {
+      const callback = javascriptGenerator.valueToCode(block, "CALLBACK", Order.NONE) || "() => {}";
+      const delay = javascriptGenerator.valueToCode(block, "DELAY", Order.NONE) || "0";
+      return `setTimeout(${callback}, ${delay});\n`;
+    };
+    registeredBlocks.add(setTimeoutType);
+  }
+
+  const setIntervalType = "mac_setInterval";
+  if (!registeredBlocks.has(setIntervalType)) {
+    Blockly.Blocks[setIntervalType] = {
+      init(this: any) {
+        this.setColour("#7f8c8d");
+        this.setPreviousStatement(true);
+        this.setNextStatement(true);
+        this.setTooltip("Run a function repeatedly at an interval (milliseconds)");
+        this.appendDummyInput().appendField("setInterval(");
+        attachShadowExpression(this.appendValueInput("CALLBACK"));
+        this.appendDummyInput().appendField(",");
+        attachShadowExpression(this.appendValueInput("DELAY"), "1000");
+        this.appendDummyInput().appendField(")");
+        this.setInputsInline(true);
+      },
+    };
+    javascriptGenerator.forBlock[setIntervalType] = function (block: any) {
+      const callback = javascriptGenerator.valueToCode(block, "CALLBACK", Order.NONE) || "() => {}";
+      const delay = javascriptGenerator.valueToCode(block, "DELAY", Order.NONE) || "0";
+      return `setInterval(${callback}, ${delay});\n`;
+    };
+    registeredBlocks.add(setIntervalType);
+  }
+
+  const awaitPromiseType = "mac_await_promise";
+  if (!registeredBlocks.has(awaitPromiseType)) {
+    Blockly.Blocks[awaitPromiseType] = {
+      init(this: any) {
+        this.setColour("#7f8c8d");
+        this.setPreviousStatement(true);
+        this.setNextStatement(true);
+        this.setTooltip("Await a new Promise — the resolve parameter can be called inside the body to resolve it");
+        this.appendDummyInput()
+          .appendField("await new Promise(")
+          .appendField(new Blockly.FieldTextInput("resolve"), "PARAM")
+          .appendField("=> {");
+        this.appendStatementInput("BODY");
+        this.appendDummyInput().appendField("})");
+      },
+    };
+    javascriptGenerator.forBlock[awaitPromiseType] = function (block: any) {
+      const param = block.getFieldValue("PARAM") || "resolve";
+      const body = javascriptGenerator.statementToCode(block, "BODY");
+      const trimmed = body.trim();
+      if (trimmed.split("\n").length === 1) {
+        return `await new Promise(${param} => ${trimmed.replace(/;$/, "")});\n`;
+      }
+      return `await new Promise(${param} => {\n${body}});\n`;
+    };
+    registeredBlocks.add(awaitPromiseType);
+  }
+
+  // ── Typed variable block ──
+  // Provides type-aware property access on variables (loop vars, parameters, etc.)
+  // Usage: [varName] as [Type ▾] . [property ▾]
+  // Single-level property access only — no cascading.
+  // The type dropdown includes rootTree classes plus standard JS built-in types.
+  const typedVarType = "mac_typed_var";
+  if (!registeredBlocks.has(typedVarType)) {
+    /** Standard JavaScript built-in type entries for the type dropdown */
+    const JS_BUILTIN_TYPES: Record<string, CompletionNode> = {
+      Array: {
+        length: { type: "property", detail: "number" },
+        push: { type: "method", detail: "(...items) => number" },
+        pop: { type: "method", detail: "() => T | undefined" },
+        shift: { type: "method", detail: "() => T | undefined" },
+        unshift: { type: "method", detail: "(...items) => number" },
+        splice: { type: "method", detail: "(start, deleteCount?, ...items) => T[]" },
+        slice: { type: "method", detail: "(start?, end?) => T[]" },
+        indexOf: { type: "method", detail: "(item, fromIndex?) => number" },
+        includes: { type: "method", detail: "(item, fromIndex?) => boolean" },
+        find: { type: "method", detail: "(predicate) => T | undefined" },
+        findIndex: { type: "method", detail: "(predicate) => number" },
+        filter: { type: "method", detail: "(predicate) => T[]" },
+        map: { type: "method", detail: "(fn) => U[]" },
+        reduce: { type: "method", detail: "(fn, initialValue?) => U" },
+        forEach: { type: "method", detail: "(fn) => void" },
+        some: { type: "method", detail: "(predicate) => boolean" },
+        every: { type: "method", detail: "(predicate) => boolean" },
+        sort: { type: "method", detail: "(compareFn?) => T[]" },
+        reverse: { type: "method", detail: "() => T[]" },
+        flat: { type: "method", detail: "(depth?) => T[]" },
+        flatMap: { type: "method", detail: "(fn) => U[]" },
+        join: { type: "method", detail: "(separator?) => string" },
+        concat: { type: "method", detail: "(...items) => T[]" },
+        fill: { type: "method", detail: "(value, start?, end?) => T[]" },
+        at: { type: "method", detail: "(index) => T | undefined" },
+      },
+      String: {
+        length: { type: "property", detail: "number" },
+        charAt: { type: "method", detail: "(index) => string" },
+        charCodeAt: { type: "method", detail: "(index) => number" },
+        includes: { type: "method", detail: "(search, position?) => boolean" },
+        startsWith: { type: "method", detail: "(search, position?) => boolean" },
+        endsWith: { type: "method", detail: "(search, endPosition?) => boolean" },
+        indexOf: { type: "method", detail: "(search, fromIndex?) => number" },
+        lastIndexOf: { type: "method", detail: "(search, fromIndex?) => number" },
+        slice: { type: "method", detail: "(start?, end?) => string" },
+        substring: { type: "method", detail: "(start, end?) => string" },
+        toLowerCase: { type: "method", detail: "() => string" },
+        toUpperCase: { type: "method", detail: "() => string" },
+        trim: { type: "method", detail: "() => string" },
+        trimStart: { type: "method", detail: "() => string" },
+        trimEnd: { type: "method", detail: "() => string" },
+        split: { type: "method", detail: "(separator, limit?) => string[]" },
+        replace: { type: "method", detail: "(pattern, replacement) => string" },
+        replaceAll: { type: "method", detail: "(pattern, replacement) => string" },
+        match: { type: "method", detail: "(regexp) => RegExpMatchArray | null" },
+        padStart: { type: "method", detail: "(targetLength, padString?) => string" },
+        padEnd: { type: "method", detail: "(targetLength, padString?) => string" },
+        repeat: { type: "method", detail: "(count) => string" },
+        at: { type: "method", detail: "(index) => string | undefined" },
+      },
+      Number: {
+        toFixed: { type: "method", detail: "(digits?) => string" },
+        toPrecision: { type: "method", detail: "(precision?) => string" },
+        toString: { type: "method", detail: "(radix?) => string" },
+        valueOf: { type: "method", detail: "() => number" },
+      },
+      Boolean: {
+        toString: { type: "method", detail: "() => string" },
+        valueOf: { type: "method", detail: "() => boolean" },
+      },
+      Set: {
+        size: { type: "property", detail: "number" },
+        add: { type: "method", detail: "(value) => Set" },
+        delete: { type: "method", detail: "(value) => boolean" },
+        has: { type: "method", detail: "(value) => boolean" },
+        clear: { type: "method", detail: "() => void" },
+        forEach: { type: "method", detail: "(fn) => void" },
+        values: { type: "method", detail: "() => Iterator" },
+        entries: { type: "method", detail: "() => Iterator" },
+        keys: { type: "method", detail: "() => Iterator" },
+      },
+      Map: {
+        size: { type: "property", detail: "number" },
+        get: { type: "method", detail: "(key) => V | undefined" },
+        set: { type: "method", detail: "(key, value) => Map" },
+        delete: { type: "method", detail: "(key) => boolean" },
+        has: { type: "method", detail: "(key) => boolean" },
+        clear: { type: "method", detail: "() => void" },
+        forEach: { type: "method", detail: "(fn) => void" },
+        keys: { type: "method", detail: "() => Iterator" },
+        values: { type: "method", detail: "() => Iterator" },
+        entries: { type: "method", detail: "() => Iterator" },
+      },
+      Date: {
+        getTime: { type: "method", detail: "() => number" },
+        getFullYear: { type: "method", detail: "() => number" },
+        getMonth: { type: "method", detail: "() => number" },
+        getDate: { type: "method", detail: "() => number" },
+        getDay: { type: "method", detail: "() => number" },
+        getHours: { type: "method", detail: "() => number" },
+        getMinutes: { type: "method", detail: "() => number" },
+        getSeconds: { type: "method", detail: "() => number" },
+        toISOString: { type: "method", detail: "() => string" },
+        toLocaleDateString: { type: "method", detail: "(locale?, options?) => string" },
+        toLocaleTimeString: { type: "method", detail: "(locale?, options?) => string" },
+        toLocaleString: { type: "method", detail: "(locale?, options?) => string" },
+        toString: { type: "method", detail: "() => string" },
+      },
+      RegExp: {
+        test: { type: "method", detail: "(string) => boolean" },
+        exec: { type: "method", detail: "(string) => RegExpExecArray | null" },
+        source: { type: "property", detail: "string" },
+        flags: { type: "property", detail: "string" },
+        global: { type: "property", detail: "boolean" },
+        ignoreCase: { type: "property", detail: "boolean" },
+        lastIndex: { type: "property", detail: "number" },
+      },
+      Promise: {
+        then: { type: "method", detail: "(onFulfilled, onRejected?) => Promise" },
+        catch: { type: "method", detail: "(onRejected) => Promise" },
+        finally: { type: "method", detail: "(onFinally) => Promise" },
+      },
+      Error: {
+        message: { type: "property", detail: "string" },
+        name: { type: "property", detail: "string" },
+        stack: { type: "property", detail: "string | undefined" },
+        cause: { type: "property", detail: "unknown" },
+      },
+    };
+
+    /** Get available type names from rootTree + JS builtins (called when dropdown opens) */
+    function getTypeOptions(): [string, string][] {
+      const types: [string, string][] = [];
+      // Add JS built-in types
+      for (const key of Object.keys(JS_BUILTIN_TYPES)) {
+        types.push([key, key]);
+      }
+      // Add rootTree classes
+      if (rootTree) {
+        for (const [key, entry] of Object.entries(rootTree)) {
+          if (/^[A-Z]/.test(key) && (entry.instanceChildren || entry.children)) {
+            // Skip if already added as a built-in
+            if (!JS_BUILTIN_TYPES[key]) {
+              types.push([key, key]);
+            }
+          }
+        }
+      }
+      types.sort((a, b) => a[0].localeCompare(b[0]));
+      return types.length > 0 ? types : [["(none)", "__none__"]];
+    }
+
+    /**
+     * Collect all known properties for a type by merging:
+     * 1. The class entry's instanceChildren (prototype methods)
+     * 2. Any rootTree variable whose detail/type matches (data properties like system)
+     */
+    function getMergedChildrenForType(typeName: string): CompletionNode | null {
+      if (!rootTree) return null;
+      const merged: CompletionNode = {};
+      let found = false;
+
+      // Class entry (e.g., Actor5e) — instanceChildren has prototype methods
+      const classEntry = rootTree[typeName];
+      if (classEntry) {
+        const classChildren = classEntry.instanceChildren ?? classEntry.children;
+        if (classChildren) {
+          Object.assign(merged, classChildren);
+          found = true;
+        }
+      }
+
+      // Scan for variable/property entries whose detail references this type
+      // e.g., `actor` has detail "Actor5e" and children with `system`, `name`, etc.
+      for (const [key, entry] of Object.entries(rootTree)) {
+        if (key === typeName) continue;
+        if (entry.type !== "variable" && entry.type !== "property") continue;
+        const entryType = extractTypeName(entry.detail ?? "");
+        if (entryType === typeName) {
+          const varChildren = getEffectiveChildren(entry);
+          if (varChildren) {
+            Object.assign(merged, varChildren);
+            found = true;
+          }
+        }
+      }
+
+      return found ? merged : null;
+    }
+
+    /** Get the first-level property names for a selected type */
+    function getPropertiesForType(typeName: string): [string, string][] {
+      // Check JS builtins first
+      const builtinNode = JS_BUILTIN_TYPES[typeName];
+      if (builtinNode) {
+        return Object.keys(builtinNode)
+          .sort((a, b) => a.localeCompare(b))
+          .map((k) => [k, k]);
+      }
+      // Merge class + variable children from rootTree
+      const merged = getMergedChildrenForType(typeName);
+      if (merged) {
+        return filteredKeys(merged).map((k) => [k, k]);
+      }
+      return [];
+    }
+
+    /**
+     * Get the CompletionNode for the typed var's current type,
+     * used as the root for chain walking.
+     */
+    function getTypedVarRoot(typeName: string): CompletionNode | null {
+      const builtinNode = JS_BUILTIN_TYPES[typeName];
+      if (builtinNode) return builtinNode;
+      return getMergedChildrenForType(typeName);
+    }
+
+    /**
+     * Rebuild the property chain from `fromIndex` onward on a typed var block.
+     * Works like namespace block rebuildChain but starts from the type's children.
+     */
+    function rebuildTypedVarChain(block: any, fromIndex: number): void {
+      // Remove all chain dropdowns after fromIndex
+      for (let i = block.tvChainDepth_ ?? 0; i > fromIndex; i--) {
+        if (block.getInput(`TCHAIN_${i}`)) {
+          block.removeInput(`TCHAIN_${i}`);
+        }
+      }
+      block.tvChainDepth_ = fromIndex;
+
+      // Remove function parameter inputs
+      removeFunctionInputs(block, "TPARAM_");
+
+      // Collect real selections (skip sentinel)
+      const selections: string[] = [];
+      for (let i = 0; i <= fromIndex; i++) {
+        const val = block.getFieldValue(`TPROP_${i}`);
+        if (val != null && val !== SELF_VALUE) selections.push(val);
+      }
+
+      // If sentinel selected, stop
+      const lastVal = block.getFieldValue(`TPROP_${fromIndex}`);
+      if (lastVal === SELF_VALUE) {
+        if (block.rendered) { block.initSvg(); block.render(); }
+        return;
+      }
+
+      const typeName = block.getFieldValue("TYPE");
+      if (!typeName || typeName === "__none__") return;
+      const typeRoot = getTypedVarRoot(typeName);
+      if (!typeRoot) return;
+
+      // Check if terminal selection is a function/method
+      const terminalEntry = walkToEntry(typeRoot, selections);
+      if (terminalEntry && (terminalEntry.type === "function" || terminalEntry.type === "method")) {
+        addFunctionInputs(block, terminalEntry, "TPARAM_");
+        return;
+      }
+
+      // If selected child has its own children, add a new dropdown
+      const nextChildren = selections.length > 0 ? walkSelections(typeRoot, selections) : typeRoot;
+      if (nextChildren) {
+        const keys = filteredKeys(nextChildren);
+        if (keys.length > 0) {
+          const nextIndex = fromIndex + 1;
+          const options: [string, string][] = [
+            SELF_OPTION,
+            ...keys.map((k) => [k, k] as [string, string]),
+          ];
+          const capturedIndex = nextIndex;
+          block
+            .appendDummyInput(`TCHAIN_${nextIndex}`)
+            .appendField(". ")
+            .appendField(
+              new Blockly.FieldDropdown(options, function (
+                this: any,
+                newValue: string
+              ) {
+                const src = this.getSourceBlock();
+                if (src && !src.isInFlyout && !src.loading_) {
+                  setTimeout(() => rebuildTypedVarChain(src, capturedIndex), 0);
+                }
+                return newValue;
+              }),
+              `TPROP_${nextIndex}`
+            );
+          block.tvChainDepth_ = nextIndex;
+        }
+      }
+
+      if (block.rendered) {
+        block.initSvg();
+        block.render();
+      }
+    }
+
+    /** Rebuild the entire property chain when the type dropdown changes */
+    function rebuildTypedVarFromType(block: any): void {
+      // Remove all chain dropdowns and function params
+      for (let i = block.tvChainDepth_ ?? 0; i >= 0; i--) {
+        if (block.getInput(`TCHAIN_${i}`)) {
+          block.removeInput(`TCHAIN_${i}`);
+        }
+      }
+      block.tvChainDepth_ = -1;
+      removeFunctionInputs(block, "TPARAM_");
+
+      const typeName = block.getFieldValue("TYPE");
+      if (!typeName || typeName === "__none__") return;
+
+      const props = getPropertiesForType(typeName);
+      if (props.length === 0) return;
+
+      const options: [string, string][] = [SELF_OPTION, ...props];
+      block
+        .appendDummyInput("TCHAIN_0")
+        .appendField(". ")
+        .appendField(
+          new Blockly.FieldDropdown(options, function (
+            this: any,
+            newValue: string
+          ) {
+            const src = this.getSourceBlock();
+            if (src && !src.isInFlyout && !src.loading_) {
+              setTimeout(() => rebuildTypedVarChain(src, 0), 0);
+            }
+            return newValue;
+          }),
+          "TPROP_0"
+        );
+      block.tvChainDepth_ = 0;
+
+      if (block.rendered) {
+        block.initSvg();
+        block.render();
+      }
+    }
+
+    Blockly.Blocks[typedVarType] = {
+      init: function (this: any) {
+        this.loading_ = false;
+        this.tvChainDepth_ = -1;
+        this.appendDummyInput("TVAR_INPUT")
+          .appendField(new Blockly.FieldTextInput("target"), "VAR")
+          .appendField(" as ")
+          .appendField(
+            new Blockly.FieldDropdown(getTypeOptions, function (
+              this: any,
+              newValue: string
+            ) {
+              const src = this.getSourceBlock();
+              if (src && !src.isInFlyout && !src.loading_) {
+                setTimeout(() => rebuildTypedVarFromType(src), 0);
+              }
+              return newValue;
+            }),
+            "TYPE"
+          );
+        this.setOutput(true, null);
+        this.setColour(100);
+        this.setTooltip(
+          "Access properties on a typed variable (loop variable, function parameter, etc.)"
+        );
+      },
+
+      saveExtraState: function (this: any) {
+        const state: any = {};
+        const varName = this.getFieldValue("VAR");
+        if (varName && varName !== "target") state.varName = varName;
+        const type = this.getFieldValue("TYPE");
+        if (type && type !== "__none__") state.type = type;
+        // Collect chain selections
+        const selections: string[] = [];
+        for (let i = 0; i <= (this.tvChainDepth_ ?? -1); i++) {
+          const val = this.getFieldValue(`TPROP_${i}`);
+          if (val == null || val === SELF_VALUE) break;
+          selections.push(val);
+        }
+        if (selections.length > 0) state.selections = selections;
+        return Object.keys(state).length > 0 ? state : {};
+      },
+
+      loadExtraState: function (this: any, state: any) {
+        if (!state) return;
+        this.loading_ = true;
+        try {
+          if (state.varName) this.setFieldValue(state.varName, "VAR");
+          if (state.type) {
+            this.setFieldValue(state.type, "TYPE");
+
+            const typeRoot = getTypedVarRoot(state.type);
+            if (!typeRoot) return;
+
+            const selections: string[] = state.selections ?? [];
+            // Build the chain of dropdowns
+            for (let i = 0; i < Math.max(selections.length, 1); i++) {
+              const prevSels = selections.slice(0, i);
+              const node = i === 0 ? typeRoot : walkSelections(typeRoot, prevSels);
+              if (!node) break;
+              const keys = filteredKeys(node);
+              if (keys.length === 0) break;
+              const options: [string, string][] = [
+                SELF_OPTION,
+                ...keys.map((k) => [k, k] as [string, string]),
+              ];
+              const capturedIndex = i;
+              this.appendDummyInput(`TCHAIN_${i}`)
+                .appendField(". ")
+                .appendField(
+                  new Blockly.FieldDropdown(options, function (
+                    this: any,
+                    newValue: string
+                  ) {
+                    const src = this.getSourceBlock();
+                    if (src && !src.isInFlyout && !src.loading_) {
+                      setTimeout(() => rebuildTypedVarChain(src, capturedIndex), 0);
+                    }
+                    return newValue;
+                  }),
+                  `TPROP_${i}`
+                );
+              if (i < selections.length) {
+                this.setFieldValue(selections[i], `TPROP_${i}`);
+              }
+              this.tvChainDepth_ = i;
+            }
+
+            // If the terminal selection is a function, add parameter inputs
+            if (selections.length > 0) {
+              const terminalEntry = walkToEntry(typeRoot, selections);
+              if (terminalEntry && (terminalEntry.type === "function" || terminalEntry.type === "method")) {
+                addFunctionInputs(this, terminalEntry, "TPARAM_");
+              }
+            }
+          }
+        } finally {
+          // Defer clearing loading_ — same reason as namespace blocks:
+          // Blockly's loadFields runs after loadExtraState and would
+          // trigger dropdown validators that destroy the cascade.
+          setTimeout(() => { this.loading_ = false; }, 0);
+        }
+      },
+    };
+
+    // Code generator: varName.prop1.prop2... or varName.method(args)
+    // Emits a /* @tv:TypeName */ annotation so jsToBlocks can reconstruct
+    // the typed var block when round-tripping through text mode.
+    javascriptGenerator.forBlock[typedVarType] = function (block: any) {
+      const varName = block.getFieldValue("VAR") || "target";
+      const typeName = block.getFieldValue("TYPE") || "";
+      const parts: string[] = [varName];
+      for (let i = 0; i <= (block.tvChainDepth_ ?? -1); i++) {
+        const val = block.getFieldValue(`TPROP_${i}`);
+        if (!val || val === SELF_VALUE) break;
+        parts.push(val);
+      }
+      const accessPath = parts.join(".");
+      // Annotation for property-access typed vars (not bare variable, not calls)
+      const tvAnnotation = (typeName && typeName !== "__none__" && parts.length > 1)
+        ? ` /* @tv:${typeName} */`
+        : "";
+
+      if (block.isCall_) {
+        const args = collectFunctionParams(block, "TPARAM_");
+        const code = `${block.isAsync_ ? "await " : ""}${accessPath}(${args})`;
+        return [code, block.isAsync_ ? Order.AWAIT : Order.FUNCTION_CALL];
+      }
+      if (parts.length > 1) {
+        return [`${accessPath}${tvAnnotation}`, Order.MEMBER];
+      }
+      return [varName, Order.ATOMIC];
+    };
+
+    registeredBlocks.add(typedVarType);
+  }
+
+  // ── Shared helper: rebuild HEADER input with inline param fields ──
+  function rebuildFuncHeader(block: any): void {
+    // Collect current param names before destroying the input
+    const paramNames: string[] = [];
+    for (let i = 0; i < block.paramCount_; i++) {
+      // Check field value first, fall back to temp load name
+      paramNames.push(block.getFieldValue(`PNAME${i}`) || block[`_loadName${i}`] || `param${i}`);
+      delete block[`_loadName${i}`];
+    }
+    const asyncVal = block.getFieldValue("ASYNC") || "sync";
+    const nameVal = block.getFieldValue("NAME") || "myFunction";
+
+    block.removeInput("HEADER");
+    const header = block.appendDummyInput("HEADER");
+    header
+      .appendField(new Blockly.FieldDropdown([["function", "sync"], ["async function", "async"]]), "ASYNC")
+      .appendField(new Blockly.FieldTextInput(nameVal), "NAME")
+      .appendField("(");
+    for (let i = 0; i < block.paramCount_; i++) {
+      if (i > 0) header.appendField(",");
+      header.appendField(new Blockly.FieldTextInput(paramNames[i] || `param${i}`), `PNAME${i}`);
+    }
+    header
+      .appendField(")")
+      .appendField(new Blockly.FieldImage(PLUS_IMAGE, 15, 15, "+", () => {
+        block.paramCount_++;
+        rebuildFuncHeader(block);
+      }))
+      .appendField(new Blockly.FieldImage(MINUS_IMAGE, 15, 15, "−", () => {
+        if (block.paramCount_ <= 0) return;
+        block.paramCount_--;
+        rebuildFuncHeader(block);
+      }));
+
+    block.setFieldValue(asyncVal, "ASYNC");
+    // Move HEADER back to the top (before BODY)
+    block.moveInputBefore("HEADER", "BODY");
+    if (block.rendered) { block.initSvg(); block.render(); }
+  }
+
+  // ── Function definition block (no return) ──
+  const funcDefType = "mac_function_def";
+  if (!registeredBlocks.has(funcDefType)) {
+    Blockly.Blocks[funcDefType] = {
+      paramCount_: 0,
+      init(this: any) {
+        this.setColour("#995ba5");
+        this.setPreviousStatement(true);
+        this.setNextStatement(true);
+        this.setTooltip("Define a function");
+        this.appendDummyInput("HEADER")
+          .appendField(new Blockly.FieldDropdown([["function", "sync"], ["async function", "async"]]), "ASYNC")
+          .appendField(new Blockly.FieldTextInput("myFunction"), "NAME")
+          .appendField("(")
+          .appendField(")")
+          .appendField(new Blockly.FieldImage(PLUS_IMAGE, 15, 15, "+", () => {
+            this.paramCount_++;
+            rebuildFuncHeader(this);
+          }))
+          .appendField(new Blockly.FieldImage(MINUS_IMAGE, 15, 15, "−", () => {
+            if (this.paramCount_ <= 0) return;
+            this.paramCount_--;
+            rebuildFuncHeader(this);
+          }));
+        this.appendStatementInput("BODY");
+      },
+      addParam_(this: any) {
+        this.paramCount_++;
+        rebuildFuncHeader(this);
+      },
+      saveExtraState(this: any) {
+        const params: string[] = [];
+        for (let i = 0; i < this.paramCount_; i++) {
+          params.push(this.getFieldValue(`PNAME${i}`) || `param${i}`);
+        }
+        return { paramCount: this.paramCount_, params };
+      },
+      loadExtraState(this: any, state: any) {
+        const target = state?.paramCount ?? 0;
+        const names = state?.params ?? [];
+        this.paramCount_ = target;
+        if (target > 0) {
+          // Temporarily store names so rebuildFuncHeader can read them
+          for (let i = 0; i < target; i++) {
+            (this as any)[`_loadName${i}`] = names[i] || `param${i}`;
+          }
+          rebuildFuncHeader(this);
+        }
+      },
+    };
+    javascriptGenerator.forBlock[funcDefType] = function (block: any) {
+      const isAsync = block.getFieldValue("ASYNC") === "async";
+      const name = block.getFieldValue("NAME") || "myFunction";
+      const params: string[] = [];
+      for (let i = 0; i < block.paramCount_; i++) {
+        params.push(block.getFieldValue(`PNAME${i}`) || `param${i}`);
+      }
+      const body = javascriptGenerator.statementToCode(block, "BODY");
+      return `${isAsync ? "async " : ""}function ${name}(${params.join(", ")}) {\n${body}}\n`;
+    };
+    registeredBlocks.add(funcDefType);
+  }
+
+  // ── Function definition block (with return) ──
+  const funcDefRetType = "mac_function_def_return";
+  if (!registeredBlocks.has(funcDefRetType)) {
+    Blockly.Blocks[funcDefRetType] = {
+      paramCount_: 0,
+      init(this: any) {
+        this.setColour("#995ba5");
+        this.setPreviousStatement(true);
+        this.setNextStatement(true);
+        this.setTooltip("Define a function that returns a value");
+        this.appendDummyInput("HEADER")
+          .appendField(new Blockly.FieldDropdown([["function", "sync"], ["async function", "async"]]), "ASYNC")
+          .appendField(new Blockly.FieldTextInput("myFunction"), "NAME")
+          .appendField("(")
+          .appendField(")")
+          .appendField(new Blockly.FieldImage(PLUS_IMAGE, 15, 15, "+", () => {
+            this.paramCount_++;
+            rebuildFuncHeader(this);
+          }))
+          .appendField(new Blockly.FieldImage(MINUS_IMAGE, 15, 15, "−", () => {
+            if (this.paramCount_ <= 0) return;
+            this.paramCount_--;
+            rebuildFuncHeader(this);
+          }));
+        this.appendStatementInput("BODY");
+        attachShadowExpression(this.appendValueInput("RETURN").setAlign(Blockly.inputs.Align.RIGHT).appendField("return"));
+      },
+      addParam_(this: any) {
+        this.paramCount_++;
+        rebuildFuncHeader(this);
+      },
+      saveExtraState(this: any) {
+        const params: string[] = [];
+        for (let i = 0; i < this.paramCount_; i++) {
+          params.push(this.getFieldValue(`PNAME${i}`) || `param${i}`);
+        }
+        return { paramCount: this.paramCount_, params };
+      },
+      loadExtraState(this: any, state: any) {
+        const target = state?.paramCount ?? 0;
+        const names = state?.params ?? [];
+        this.paramCount_ = target;
+        if (target > 0) {
+          for (let i = 0; i < target; i++) {
+            (this as any)[`_loadName${i}`] = names[i] || `param${i}`;
+          }
+          rebuildFuncHeader(this);
+        }
+      },
+    };
+    javascriptGenerator.forBlock[funcDefRetType] = function (block: any) {
+      const isAsync = block.getFieldValue("ASYNC") === "async";
+      const name = block.getFieldValue("NAME") || "myFunction";
+      const params: string[] = [];
+      for (let i = 0; i < block.paramCount_; i++) {
+        params.push(block.getFieldValue(`PNAME${i}`) || `param${i}`);
+      }
+      const body = javascriptGenerator.statementToCode(block, "BODY");
+      const retVal = javascriptGenerator.valueToCode(block, "RETURN", Order.NONE) || "";
+      let code = `${isAsync ? "async " : ""}function ${name}(${params.join(", ")}) {\n${body}`;
+      if (retVal) code += `  return ${retVal};\n`;
+      code += "}\n";
+      return code;
+    };
+    registeredBlocks.add(funcDefRetType);
+  }
+
+  // ── Shared helper: rebuild HEADER input with inline param fields for arrow functions ──
+  function rebuildArrowHeader(block: any): void {
+    const paramNames: string[] = [];
+    for (let i = 0; i < block.paramCount_; i++) {
+      paramNames.push(block.getFieldValue(`PNAME${i}`) || block[`_loadName${i}`] || `param${i}`);
+      delete block[`_loadName${i}`];
+    }
+    const asyncVal = block.getFieldValue("ASYNC") || "sync";
+
+    block.removeInput("HEADER");
+    const header = block.appendDummyInput("HEADER");
+    if (block.getField?.("ASYNC")) {
+      // Field already removed with input, re-add
+    }
+    header
+      .appendField(new Blockly.FieldDropdown([["", "sync"], ["async", "async"]]), "ASYNC")
+      .appendField("(");
+    for (let i = 0; i < block.paramCount_; i++) {
+      if (i > 0) header.appendField(",");
+      header.appendField(new Blockly.FieldTextInput(paramNames[i] || `param${i}`), `PNAME${i}`);
+    }
+    header
+      .appendField(") =>")
+      .appendField(new Blockly.FieldImage(PLUS_IMAGE, 15, 15, "+", () => {
+        block.paramCount_++;
+        rebuildArrowHeader(block);
+      }))
+      .appendField(new Blockly.FieldImage(MINUS_IMAGE, 15, 15, "−", () => {
+        if (block.paramCount_ <= 0) return;
+        block.paramCount_--;
+        rebuildArrowHeader(block);
+      }));
+
+    block.setFieldValue(asyncVal, "ASYNC");
+    block.moveInputBefore("HEADER", "BODY");
+    if (block.rendered) { block.initSvg(); block.render(); }
+  }
+
+  // ── Arrow function block (no return — statement body) ──
+  const arrowDefType = "mac_arrow_function";
+  if (!registeredBlocks.has(arrowDefType)) {
+    Blockly.Blocks[arrowDefType] = {
+      paramCount_: 0,
+      init(this: any) {
+        this.setColour("#995ba5");
+        this.setOutput(true);
+        this.setTooltip("Arrow function expression");
+        this.appendDummyInput("HEADER")
+          .appendField(new Blockly.FieldDropdown([["", "sync"], ["async", "async"]]), "ASYNC")
+          .appendField("(")
+          .appendField(") =>")
+          .appendField(new Blockly.FieldImage(PLUS_IMAGE, 15, 15, "+", () => {
+            this.paramCount_++;
+            rebuildArrowHeader(this);
+          }))
+          .appendField(new Blockly.FieldImage(MINUS_IMAGE, 15, 15, "−", () => {
+            if (this.paramCount_ <= 0) return;
+            this.paramCount_--;
+            rebuildArrowHeader(this);
+          }));
+        this.appendStatementInput("BODY");
+      },
+      saveExtraState(this: any) {
+        const params: string[] = [];
+        for (let i = 0; i < this.paramCount_; i++) {
+          params.push(this.getFieldValue(`PNAME${i}`) || `param${i}`);
+        }
+        return { paramCount: this.paramCount_, params };
+      },
+      loadExtraState(this: any, state: any) {
+        const target = state?.paramCount ?? 0;
+        const names = state?.params ?? [];
+        this.paramCount_ = target;
+        if (target > 0) {
+          for (let i = 0; i < target; i++) {
+            (this as any)[`_loadName${i}`] = names[i] || `param${i}`;
+          }
+          rebuildArrowHeader(this);
+        }
+      },
+    };
+    javascriptGenerator.forBlock[arrowDefType] = function (block: any) {
+      const isAsync = block.getFieldValue("ASYNC") === "async";
+      const params: string[] = [];
+      for (let i = 0; i < block.paramCount_; i++) {
+        params.push(block.getFieldValue(`PNAME${i}`) || `param${i}`);
+      }
+      const body = javascriptGenerator.statementToCode(block, "BODY");
+      return [`${isAsync ? "async " : ""}(${params.join(", ")}) => {\n${body}}`, Order.ATOMIC];
+    };
+    registeredBlocks.add(arrowDefType);
+  }
+
+  // ── Arrow function block (with return — expression body or explicit return) ──
+  const arrowDefRetType = "mac_arrow_function_return";
+  if (!registeredBlocks.has(arrowDefRetType)) {
+    Blockly.Blocks[arrowDefRetType] = {
+      paramCount_: 0,
+      init(this: any) {
+        this.setColour("#995ba5");
+        this.setOutput(true);
+        this.setTooltip("Arrow function expression that returns a value");
+        this.appendDummyInput("HEADER")
+          .appendField(new Blockly.FieldDropdown([["", "sync"], ["async", "async"]]), "ASYNC")
+          .appendField("(")
+          .appendField(") =>")
+          .appendField(new Blockly.FieldImage(PLUS_IMAGE, 15, 15, "+", () => {
+            this.paramCount_++;
+            rebuildArrowHeader(this);
+          }))
+          .appendField(new Blockly.FieldImage(MINUS_IMAGE, 15, 15, "−", () => {
+            if (this.paramCount_ <= 0) return;
+            this.paramCount_--;
+            rebuildArrowHeader(this);
+          }));
+        this.appendStatementInput("BODY");
+        attachShadowExpression(this.appendValueInput("RETURN").setAlign(Blockly.inputs.Align.RIGHT).appendField("return"));
+      },
+      saveExtraState(this: any) {
+        const params: string[] = [];
+        for (let i = 0; i < this.paramCount_; i++) {
+          params.push(this.getFieldValue(`PNAME${i}`) || `param${i}`);
+        }
+        return { paramCount: this.paramCount_, params };
+      },
+      loadExtraState(this: any, state: any) {
+        const target = state?.paramCount ?? 0;
+        const names = state?.params ?? [];
+        this.paramCount_ = target;
+        if (target > 0) {
+          for (let i = 0; i < target; i++) {
+            (this as any)[`_loadName${i}`] = names[i] || `param${i}`;
+          }
+          rebuildArrowHeader(this);
+        }
+      },
+    };
+    javascriptGenerator.forBlock[arrowDefRetType] = function (block: any) {
+      const isAsync = block.getFieldValue("ASYNC") === "async";
+      const params: string[] = [];
+      for (let i = 0; i < block.paramCount_; i++) {
+        params.push(block.getFieldValue(`PNAME${i}`) || `param${i}`);
+      }
+      const body = javascriptGenerator.statementToCode(block, "BODY");
+      const retVal = javascriptGenerator.valueToCode(block, "RETURN", Order.NONE) || "";
+      let code = `${isAsync ? "async " : ""}(${params.join(", ")}) => {\n${body}`;
+      if (retVal) code += `  return ${retVal};\n`;
+      code += "}";
+      return [code, Order.ATOMIC];
+    };
+    registeredBlocks.add(arrowDefRetType);
+  }
+}

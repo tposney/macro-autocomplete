@@ -2568,5 +2568,974 @@
         "detail": "(options?, operation?) => Promise<this | false | null | undefined>"
       }
     }
+  },
+  "Dialog.Options": {
+    "type": "interface",
+    "detail": "Dialog.Options",
+    "instanceChildren": {
+      "jQuery": {
+        "type": "property",
+        "detail": "boolean",
+        "info": "Whether to provide jQuery objects to callback functions (if true) or plain\nHTMLElement instances (if false). This is currently true by default but in the\nfuture will become false by default."
+      }
+    },
+    "extends": [
+      "Application.Options"
+    ]
+  },
+  "Dialog.Data": {
+    "type": "interface",
+    "detail": "Dialog.Data",
+    "instanceChildren": {
+      "title": {
+        "type": "property",
+        "detail": "string",
+        "info": "The window title displayed in the dialog header"
+      },
+      "content": {
+        "type": "property",
+        "detail": "string",
+        "info": "HTML content for the dialog form"
+      },
+      "buttons": {
+        "type": "property",
+        "detail": "Record<string, Button<unknown, JQueryOrHTML>>",
+        "info": "The buttons which are displayed as action choices for the dialog"
+      },
+      "default": {
+        "type": "property",
+        "detail": "string",
+        "info": "The name of the default button which should be triggered on Enter keypress"
+      },
+      "render": {
+        "type": "property",
+        "detail": "(element: JQueryOrHTML) => void",
+        "info": "A callback function invoked when the dialog is rendered"
+      },
+      "close": {
+        "type": "property",
+        "detail": "(element: JQueryOrHTML) => void",
+        "info": "Common callback operations to perform when the dialog is closed"
+      }
+    }
+  },
+  "Hooks.HookedFunction": {
+    "type": "interface",
+    "detail": "Hooks.HookedFunction",
+    "instanceChildren": {
+      "hook": {
+        "type": "property",
+        "detail": "string"
+      },
+      "id": {
+        "type": "property",
+        "detail": "number"
+      },
+      "fn": {
+        "type": "property",
+        "detail": "AnyFunction"
+      },
+      "once": {
+        "type": "property",
+        "detail": "boolean"
+      }
+    }
+  },
+  "Canvas.PerformanceSettings": {
+    "type": "interface",
+    "detail": "Canvas.PerformanceSettings",
+    "instanceChildren": {
+      "mode": {
+        "type": "property",
+        "detail": "CANVAS_PERFORMANCE_MODES",
+        "info": "The performance mode in CONST.CANVAS_PERFORMANCE_MODES"
+      },
+      "blur": {
+        "type": "property",
+        "detail": "{ enabled: boolean; illumination: boolean; }",
+        "info": "Blur filter configuration"
+      },
+      "mipmap": {
+        "type": "property",
+        "detail": "\"ON\" | \"OFF\"",
+        "info": "Whether to use mipmaps, \"ON\" or \"OFF\""
+      },
+      "msaa": {
+        "type": "property",
+        "detail": "boolean",
+        "info": "Whether to apply MSAA at the overall canvas level"
+      },
+      "smaa": {
+        "type": "property",
+        "detail": "boolean",
+        "info": "Whether to apply SMAA at the overall canvas level"
+      },
+      "fps": {
+        "type": "property",
+        "detail": "number",
+        "info": "Maximum framerate which should be the render target"
+      },
+      "tokenAnimation": {
+        "type": "property",
+        "detail": "boolean",
+        "info": "Whether to display token movement animation"
+      },
+      "lightAnimation": {
+        "type": "property",
+        "detail": "boolean",
+        "info": "Whether to display light source animation"
+      },
+      "lightSoftEdges": {
+        "type": "property",
+        "detail": "boolean",
+        "info": "Whether to render soft edges for light sources"
+      },
+      "textures": {
+        "type": "property",
+        "detail": "{ enabled: boolean; maxSize: number; p2Steps: number; /** @defaultValue `2` */ p2StepsMax: number; }",
+        "info": "Texture configuration"
+      }
+    }
+  },
+  "Canvas.SupportedComponents": {
+    "type": "interface",
+    "detail": "Canvas.SupportedComponents",
+    "instanceChildren": {
+      "webGL2": {
+        "type": "property",
+        "detail": "boolean",
+        "info": "Is WebGL2 supported?"
+      },
+      "readPixelsRED": {
+        "type": "property",
+        "detail": "boolean",
+        "info": "Is reading pixels in RED format supported?"
+      },
+      "offscreenCanvas": {
+        "type": "property",
+        "detail": "boolean",
+        "info": "Is the OffscreenCanvas supported?"
+      }
+    }
+  },
+  "Canvas.Dimensions": {
+    "type": "interface",
+    "detail": "Canvas.Dimensions",
+    "instanceChildren": {
+      "rect": {
+        "type": "property",
+        "detail": "PIXI.Rectangle",
+        "info": "The canvas rectangle."
+      },
+      "sceneRect": {
+        "type": "property",
+        "detail": "PIXI.Rectangle",
+        "info": "The scene rectangle."
+      }
+    },
+    "extends": [
+      "Scene.Dimensions"
+    ]
+  },
+  "Canvas.Point": {
+    "type": "interface",
+    "detail": "Canvas.Point",
+    "instanceChildren": {
+      "x": {
+        "type": "property",
+        "detail": "number"
+      },
+      "y": {
+        "type": "property",
+        "detail": "number"
+      }
+    }
+  },
+  "Canvas.PendingRenderFlags": {
+    "type": "interface",
+    "detail": "Canvas.PendingRenderFlags",
+    "instanceChildren": {
+      "OBJECTS": {
+        "type": "property",
+        "detail": "Set<RenderFlagsMixin.AnyMixed>"
+      },
+      "PERCEPTION": {
+        "type": "property",
+        "detail": "Set<RenderFlagsMixin.AnyMixed>"
+      }
+    }
+  },
+  "Token.Bars": {
+    "type": "interface",
+    "detail": "Token.Bars",
+    "instanceChildren": {
+      "bar1": {
+        "type": "property",
+        "detail": "PIXI.Graphics"
+      },
+      "bar2": {
+        "type": "property",
+        "detail": "PIXI.Graphics"
+      }
+    },
+    "extends": [
+      "PIXI.Container"
+    ]
+  },
+  "Token.AnimationContext": {
+    "type": "interface",
+    "detail": "Token.AnimationContext",
+    "instanceChildren": {
+      "name": {
+        "type": "property",
+        "detail": "PropertyKey",
+        "info": "The name of the animation"
+      },
+      "to": {
+        "type": "property",
+        "detail": "PartialAnimationData",
+        "info": "The final animation state"
+      },
+      "duration": {
+        "type": "property",
+        "detail": "number",
+        "info": "The duration of the animation"
+      },
+      "time": {
+        "type": "property",
+        "detail": "number",
+        "info": "The current time of the animation"
+      },
+      "preAnimate": {
+        "type": "property",
+        "detail": "((context: Token.AnimationContext) => Promise<void>)[]",
+        "info": "Asynchronous functions that are executed before the animation starts"
+      },
+      "postAnimate": {
+        "type": "property",
+        "detail": "((context: Token.AnimationContext) => void)[]",
+        "info": "Synchronous functions that are executed after the animation ended"
+      },
+      "onAnimate": {
+        "type": "property",
+        "detail": "((context: Token.AnimationContext) => void)[]",
+        "info": "Synchronous functions that are executed each frame after `ontick` and before | `Token#_onAnimationUpdate`"
+      },
+      "promise": {
+        "type": "property",
+        "detail": "Promise<boolean> | undefined",
+        "info": "The promise of the animation, which resolves to true if the animation\ncompleted, to false if it was terminated, and rejects if an error occurred.\nUndefined in the first frame (at time 0) of the animat"
+      }
+    }
+  },
+  "Token.RingColors": {
+    "type": "interface",
+    "detail": "Token.RingColors",
+    "instanceChildren": {
+      "ring": {
+        "type": "property",
+        "detail": "Color"
+      },
+      "background": {
+        "type": "property",
+        "detail": "Color"
+      }
+    }
+  },
+  "Token.Size": {
+    "type": "interface",
+    "detail": "Token.Size",
+    "instanceChildren": {
+      "width": {
+        "type": "property",
+        "detail": "number"
+      },
+      "height": {
+        "type": "property",
+        "detail": "number"
+      }
+    }
+  },
+  "Token.FindMovementPathJob": {
+    "type": "interface",
+    "detail": "Token.FindMovementPathJob",
+    "instanceChildren": {
+      "result": {
+        "type": "property",
+        "detail": "TokenDocument.MovementWaypoint[] | null | undefined",
+        "info": "The result of the pathfinding job. Undefined while the\nsearch is in progress, null if the job was cancelled,\nand the (partial) path if the job completed."
+      },
+      "promise": {
+        "type": "property",
+        "detail": "Promise<TokenDocument.MovementWaypoint[] | null>",
+        "info": "The promise returning the (partial) path that as found\nor null if cancelled."
+      },
+      "cancel": {
+        "type": "property",
+        "detail": "() => void",
+        "info": "If this function is called and the job hasn't completed\nyet, the job is cancelled."
+      }
+    }
+  },
+  "Actors.Implementation": {
+    "type": "interface",
+    "detail": "Actors.Implementation",
+    "extends": [
+      "Document.Internal.ConfiguredCollection"
+    ]
+  },
+  "ClientSettings.SettingSubmenuConfig": {
+    "type": "interface",
+    "detail": "ClientSettings.SettingSubmenuConfig",
+    "instanceChildren": {
+      "key": {
+        "type": "property",
+        "detail": "string"
+      },
+      "namespace": {
+        "type": "property",
+        "detail": "string"
+      },
+      "name": {
+        "type": "property",
+        "detail": "string | undefined",
+        "info": "The human-readable name"
+      },
+      "label": {
+        "type": "property",
+        "detail": "string | undefined",
+        "info": "An additional human-readable hint"
+      },
+      "hint": {
+        "type": "property",
+        "detail": "string | undefined",
+        "info": "An additional human readable hint"
+      },
+      "icon": {
+        "type": "property",
+        "detail": "string | undefined",
+        "info": "The classname of an Icon to render"
+      },
+      "type": {
+        "type": "property",
+        "detail": "(new () => FormApplication.Any) | (new () => ApplicationV2.Any)",
+        "info": "The FormApplication or ApplicationV2 to render"
+      },
+      "restricted": {
+        "type": "property",
+        "detail": "boolean | undefined",
+        "info": "If true, only a GM can edit this Setting"
+      }
+    }
+  },
+  "Items.Implementation": {
+    "type": "interface",
+    "detail": "Items.Implementation",
+    "extends": [
+      "Document.Internal.ConfiguredCollection"
+    ]
+  },
+  "Users.Implementation": {
+    "type": "interface",
+    "detail": "Users.Implementation",
+    "extends": [
+      "Document.Internal.ConfiguredCollection"
+    ]
+  },
+  "Notifications.Notification": {
+    "type": "interface",
+    "detail": "Notifications.Notification",
+    "instanceChildren": {
+      "id": {
+        "type": "property",
+        "detail": "Notifications.ID"
+      },
+      "type": {
+        "type": "property",
+        "detail": "T"
+      },
+      "timestamp": {
+        "type": "property",
+        "detail": "number"
+      },
+      "message": {
+        "type": "property",
+        "detail": "string"
+      },
+      "error": {
+        "type": "property",
+        "detail": "Error | undefined"
+      },
+      "permanent": {
+        "type": "property",
+        "detail": "boolean"
+      },
+      "console": {
+        "type": "property",
+        "detail": "boolean"
+      },
+      "active": {
+        "type": "property",
+        "detail": "boolean"
+      },
+      "progress": {
+        "type": "property",
+        "detail": "boolean"
+      },
+      "pct": {
+        "type": "property",
+        "detail": "number"
+      },
+      "element": {
+        "type": "property",
+        "detail": "HTMLLIElement | undefined"
+      },
+      "remove": {
+        "type": "property",
+        "detail": "() => void"
+      },
+      "update": {
+        "type": "property",
+        "detail": "(update: Notifications.UpdateOptions) => void"
+      }
+    }
+  },
+  "ActiveEffect.GetInitialDurationReturn": {
+    "type": "interface",
+    "detail": "ActiveEffect.GetInitialDurationReturn",
+    "instanceChildren": {
+      "duration": {
+        "type": "property",
+        "detail": "InitialDurationData"
+      }
+    }
+  },
+  "ActiveEffect.Duration": {
+    "type": "interface",
+    "detail": "ActiveEffect.Duration",
+    "instanceChildren": {
+      "type": {
+        "type": "property",
+        "detail": "DurationType",
+        "info": "The duration type, either \"seconds\", \"turns\", or \"none\""
+      },
+      "duration": {
+        "type": "property",
+        "detail": "number",
+        "info": "The total effect duration, in seconds of world time or as a decimal number with the format \\{rounds\\}.\\{turns\\}"
+      },
+      "remaining": {
+        "type": "property",
+        "detail": "number",
+        "info": "The remaining effect duration, in seconds of world time or as a decimal number with the format \\{rounds\\}.\\{turns\\}"
+      },
+      "label": {
+        "type": "property",
+        "detail": "string",
+        "info": "A formatted string label that represents the remaining duration"
+      }
+    },
+    "extends": [
+      "DurationData"
+    ]
+  },
+  "Folder.ChildNode": {
+    "type": "interface",
+    "detail": "Folder.ChildNode",
+    "extends": [
+      "abstract.DirectoryCollectionMixin.TreeNode"
+    ]
+  },
+  "Roll.Options": {
+    "type": "interface",
+    "detail": "Roll.Options",
+    "extends": [
+      "InexactPartial"
+    ]
+  },
+  "ChatMessage.CreateData": {
+    "type": "interface",
+    "detail": "ChatMessage.CreateData",
+    "instanceChildren": {
+      "type": {
+        "type": "property",
+        "detail": "SubType | null | undefined"
+      }
+    },
+    "extends": [
+      "fields.SchemaField .CreateData"
+    ]
+  },
+  "ChatMessage.SpeakerData": {
+    "type": "interface",
+    "detail": "ChatMessage.SpeakerData",
+    "extends": [
+      "fields.SchemaField.InitializedData"
+    ]
+  },
+  "Combat.HistoryData": {
+    "type": "interface",
+    "detail": "Combat.HistoryData",
+    "instanceChildren": {
+      "round": {
+        "type": "property",
+        "detail": "number | null"
+      },
+      "turn": {
+        "type": "property",
+        "detail": "number | null"
+      },
+      "tokenId": {
+        "type": "property",
+        "detail": "string | null"
+      },
+      "combatantId": {
+        "type": "property",
+        "detail": "string | null"
+      }
+    }
+  },
+  "Scene.Dimensions": {
+    "type": "interface",
+    "detail": "Scene.Dimensions",
+    "instanceChildren": {
+      "width": {
+        "type": "property",
+        "detail": "number",
+        "info": "The width of the canvas."
+      },
+      "height": {
+        "type": "property",
+        "detail": "number",
+        "info": "The height of the canvas."
+      },
+      "size": {
+        "type": "property",
+        "detail": "number",
+        "info": "The grid size."
+      },
+      "rect": {
+        "type": "property",
+        "detail": "Canvas.Rectangle",
+        "info": "The canvas rectangle."
+      },
+      "sceneX": {
+        "type": "property",
+        "detail": "number",
+        "info": "The X coordinate of the scene rectangle within the larger canvas."
+      },
+      "sceneY": {
+        "type": "property",
+        "detail": "number",
+        "info": "The Y coordinate of the scene rectangle within the larger canvas."
+      },
+      "sceneWidth": {
+        "type": "property",
+        "detail": "number",
+        "info": "The width of the scene."
+      },
+      "sceneHeight": {
+        "type": "property",
+        "detail": "number",
+        "info": "The height of the scene."
+      },
+      "sceneRect": {
+        "type": "property",
+        "detail": "Canvas.Rectangle",
+        "info": "The scene rectangle."
+      },
+      "distance": {
+        "type": "property",
+        "detail": "number",
+        "info": "The number of distance units in a single grid space."
+      },
+      "distancePixels": {
+        "type": "property",
+        "detail": "number",
+        "info": "The factor to convert distance units to pixels"
+      },
+      "units": {
+        "type": "property",
+        "detail": "string",
+        "info": "The units of distance"
+      },
+      "ratio": {
+        "type": "property",
+        "detail": "number",
+        "info": "The aspect ratio of the scene rectangle."
+      },
+      "maxR": {
+        "type": "property",
+        "detail": "number",
+        "info": "The length of the longest line that can be drawn on the canvas."
+      },
+      "rows": {
+        "type": "property",
+        "detail": "number",
+        "info": "The number of grid rows on the canvas"
+      },
+      "columns": {
+        "type": "property",
+        "detail": "number",
+        "info": "The number of grid columns on the canvas"
+      }
+    }
+  },
+  "Scene.Schema": {
+    "type": "interface",
+    "detail": "Scene.Schema",
+    "instanceChildren": {
+      "name": {
+        "type": "property",
+        "detail": "fields.StringField<{ required: true; blank: false; textSearch: true }>",
+        "info": "The name of this scene"
+      },
+      "active": {
+        "type": "property",
+        "detail": "fields.BooleanField",
+        "info": "Is this scene currently active? Only one scene may be active at a given time"
+      },
+      "navigation": {
+        "type": "property",
+        "detail": "fields.BooleanField<{ initial: true }>",
+        "info": "Is this scene displayed in the top navigation bar?"
+      },
+      "navOrder": {
+        "type": "property",
+        "detail": "fields.NumberField<{ required: true; nullable: false; integer: true; initial: 0 }>",
+        "info": "The sorting order of this Scene in the navigation bar relative to siblings"
+      },
+      "navName": {
+        "type": "property",
+        "detail": "fields.HTMLField<{ textSearch: true }>",
+        "info": "A string which overrides Scene name for display in the navigation bar"
+      },
+      "background": {
+        "type": "property",
+        "detail": "TextureData",
+        "info": "An image or video file that provides the background texture for the scene."
+      },
+      "foreground": {
+        "type": "property",
+        "detail": "fields.FilePathField<{ categories: [\"IMAGE\", \"VIDEO\"]; virtual: true }>",
+        "info": "An image or video file path providing foreground media for the scene"
+      },
+      "foregroundElevation": {
+        "type": "property",
+        "detail": "fields.NumberField<{ required: false; positive: true; integer: true }>",
+        "info": "The elevation of the foreground layer where overhead tiles reside"
+      },
+      "thumb": {
+        "type": "property",
+        "detail": "fields.FilePathField<{ categories: [\"IMAGE\"] }>",
+        "info": "A thumbnail image which depicts the scene at lower resolution"
+      },
+      "width": {
+        "type": "property",
+        "detail": "fields.NumberField<{ integer: true; positive: true; initial: 4000 }>",
+        "info": "The width of the scene canvas, normally the width of the background media"
+      },
+      "height": {
+        "type": "property",
+        "detail": "fields.NumberField<{ integer: true; positive: true; initial: 3000 }>",
+        "info": "The height of the scene canvas, normally the height of the background media"
+      },
+      "padding": {
+        "type": "property",
+        "detail": "fields.NumberField<{ required: true; nullable: false; min: 0; max: 0.5; step: 0.05; initial: 0.25 }>",
+        "info": "The proportion of canvas padding applied around the outside of the scene\ndimensions to provide additional buffer space"
+      },
+      "initial": {
+        "type": "property",
+        "detail": "fields.SchemaField<{ /** @defaultValue `null` */ x: fields.NumberField<{ integer: true; required: true }>; /** @defaultValue `null` */ y: fields.NumberField<{ integer: true; required: true }>; /** @defaultValue `0.5` */ scale: fields.NumberField<{ required: true; positive: true }>; }>",
+        "info": "The initial view coordinates for the scene"
+      },
+      "backgroundColor": {
+        "type": "property",
+        "detail": "fields.ColorField<{ nullable: false; initial: \"#999999\" }>",
+        "info": "The color of the canvas displayed behind the scene background"
+      },
+      "grid": {
+        "type": "property",
+        "detail": "fields.SchemaField<GridSchema, // eslint-disable-next-line @typescript-eslint/no-empty-object-type {}, // eslint-disable-next-line @typescript-eslint/no-deprecated fields.SchemaField.Internal.AssignmentType<GridSchema, fields.SchemaField.DefaultOptions>, foundry.grid.BaseGrid >",
+        "info": "Grid configuration for the scene"
+      },
+      "tokenVision": {
+        "type": "property",
+        "detail": "fields.BooleanField<{ initial: true }>",
+        "info": "Do Tokens require vision in order to see the Scene environment?"
+      },
+      "fog": {
+        "type": "property",
+        "detail": "fields.SchemaField<FogSchema>",
+        "info": "Fog-exploration settings and other data"
+      },
+      "environment": {
+        "type": "property",
+        "detail": "fields.SchemaField<EnvironmentSchema>",
+        "info": "The environment data applied to the Scene."
+      },
+      "drawings": {
+        "type": "property",
+        "detail": "fields.EmbeddedCollectionField<typeof BaseDrawing, Scene.Implementation>",
+        "info": "A collection of embedded Drawing objects."
+      },
+      "tokens": {
+        "type": "property",
+        "detail": "fields.EmbeddedCollectionField<typeof BaseToken, Scene.Implementation>",
+        "info": "A collection of embedded Tile objects."
+      },
+      "lights": {
+        "type": "property",
+        "detail": "fields.EmbeddedCollectionField<typeof BaseAmbientLight, Scene.Implementation>",
+        "info": "A collection of embedded Token objects."
+      },
+      "notes": {
+        "type": "property",
+        "detail": "fields.EmbeddedCollectionField<typeof BaseNote, Scene.Implementation>",
+        "info": "A collection of embedded AmbientLight objects."
+      },
+      "sounds": {
+        "type": "property",
+        "detail": "fields.EmbeddedCollectionField<typeof BaseAmbientSound, Scene.Implementation>",
+        "info": "A collection of embedded Note objects."
+      },
+      "regions": {
+        "type": "property",
+        "detail": "fields.EmbeddedCollectionField<typeof BaseRegion, Scene.Implementation>",
+        "info": "A collection of embedded Region documents."
+      },
+      "templates": {
+        "type": "property",
+        "detail": "fields.EmbeddedCollectionField<typeof BaseMeasuredTemplate, Scene.Implementation>",
+        "info": "A collection of embedded AmbientSound objects."
+      },
+      "tiles": {
+        "type": "property",
+        "detail": "fields.EmbeddedCollectionField<typeof BaseTile, Scene.Implementation>",
+        "info": "A collection of embedded MeasuredTemplate objects."
+      },
+      "walls": {
+        "type": "property",
+        "detail": "fields.EmbeddedCollectionField<typeof BaseWall, Scene.Implementation>",
+        "info": "A collection of embedded Wall objects"
+      },
+      "playlist": {
+        "type": "property",
+        "detail": "fields.ForeignDocumentField<typeof BasePlaylist>",
+        "info": "A linked Playlist document which should begin automatically playing when this Scene becomes active."
+      },
+      "playlistSound": {
+        "type": "property",
+        "detail": "fields.ForeignDocumentField<typeof BasePlaylistSound, { idOnly: true }>",
+        "info": "A linked PlaylistSound document from the selected playlist that will\nbegin automatically playing when this Scene becomes active"
+      },
+      "journal": {
+        "type": "property",
+        "detail": "fields.ForeignDocumentField<typeof BaseJournalEntry>",
+        "info": "A JournalEntry document which provides narrative details about this Scene"
+      },
+      "journalEntryPage": {
+        "type": "property",
+        "detail": "fields.ForeignDocumentField<typeof BaseJournalEntryPage, { idOnly: true }>",
+        "info": "A document ID for a JournalEntryPage which provides narrative details about this Scene"
+      },
+      "weather": {
+        "type": "property",
+        "detail": "fields.StringField<{ required: true }>",
+        "info": "A named weather effect which should be rendered in this Scene."
+      },
+      "folder": {
+        "type": "property",
+        "detail": "fields.ForeignDocumentField<typeof BaseFolder>",
+        "info": "The _id of a Folder which contains this Actor"
+      },
+      "sort": {
+        "type": "property",
+        "detail": "fields.IntegerSortField",
+        "info": "The numeric sort value which orders this Actor relative to its siblings"
+      },
+      "ownership": {
+        "type": "property",
+        "detail": "fields.DocumentOwnershipField",
+        "info": "An object which configures ownership of this Scene"
+      },
+      "flags": {
+        "type": "property",
+        "detail": "fields.DocumentFlagsField<Name>",
+        "info": "An object of optional key/value flags"
+      }
+    },
+    "extends": [
+      "DataSchema"
+    ]
+  },
+  "User.GetHotbarMacrosData": {
+    "type": "interface",
+    "detail": "User.GetHotbarMacrosData",
+    "instanceChildren": {
+      "slot": {
+        "type": "property",
+        "detail": "number"
+      },
+      "macro": {
+        "type": "property",
+        "detail": "Macro.Implementation | null"
+      }
+    }
+  },
+  "Roll.Implementation": {
+    "type": "interface",
+    "detail": "Roll.Implementation",
+    "extends": [
+      "FixedInstanceType"
+    ]
+  },
+  "TokenDocument.TrackedAttributesDescription": {
+    "type": "interface",
+    "detail": "TokenDocument.TrackedAttributesDescription",
+    "instanceChildren": {
+      "bar": {
+        "type": "property",
+        "detail": "string[][]",
+        "info": "A list of property path arrays to attributes with both a value and a max property."
+      },
+      "value": {
+        "type": "property",
+        "detail": "string[][]",
+        "info": "A list of property path arrays to attributes that have only a value property."
+      }
+    }
+  },
+  "TokenDocument.TrackedAttributesChoice": {
+    "type": "interface",
+    "detail": "TokenDocument.TrackedAttributesChoice",
+    "instanceChildren": {
+      "group": {
+        "type": "property",
+        "detail": "string"
+      },
+      "value": {
+        "type": "property",
+        "detail": "string"
+      },
+      "label": {
+        "type": "property",
+        "detail": "string"
+      }
+    }
+  },
+  "TokenDocument.MovementData": {
+    "type": "interface",
+    "detail": "TokenDocument.MovementData",
+    "instanceChildren": {
+      "id": {
+        "type": "property",
+        "detail": "string",
+        "info": "The ID of the movement"
+      },
+      "chain": {
+        "type": "property",
+        "detail": "string[]",
+        "info": "The chain of prior movement IDs that this movement is a continuation of"
+      },
+      "origin": {
+        "type": "property",
+        "detail": "TokenDocument.Position",
+        "info": "The origin of movement"
+      },
+      "destination": {
+        "type": "property",
+        "detail": "TokenDocument.Position",
+        "info": "The destination of movement"
+      },
+      "passed": {
+        "type": "property",
+        "detail": "TokenDocument.MovementSectionData",
+        "info": "The waypoints and measurements of the passed path"
+      },
+      "pending": {
+        "type": "property",
+        "detail": "TokenDocument.MovementSectionData",
+        "info": "The waypoints and measurements of the pending path"
+      },
+      "history": {
+        "type": "property",
+        "detail": "TokenDocument.MovementHistoryData",
+        "info": "The waypoints and measurements of the history path"
+      },
+      "constrained": {
+        "type": "property",
+        "detail": "boolean",
+        "info": "Was the movement constrained?"
+      },
+      "recorded": {
+        "type": "property",
+        "detail": "boolean",
+        "info": "Was the movement recorded in the movement history?"
+      },
+      "method": {
+        "type": "property",
+        "detail": "TokenDocument.MovementMethod",
+        "info": "The method of movement"
+      },
+      "constrainOptions": {
+        "type": "property",
+        "detail": "ConstrainOptions",
+        "info": "The options to constrain movement"
+      },
+      "autoRotate": {
+        "type": "property",
+        "detail": "boolean",
+        "info": "Automatically rotate the token in the direction of movement?"
+      },
+      "showRuler": {
+        "type": "property",
+        "detail": "boolean",
+        "info": "Show the ruler during the movement animation of the token?"
+      },
+      "user": {
+        "type": "property",
+        "detail": "User.Implementation",
+        "info": "The user that moved the token"
+      },
+      "state": {
+        "type": "property",
+        "detail": "TokenDocument.MovementState",
+        "info": "The state of the movement"
+      },
+      "updateOptions": {
+        "type": "property",
+        "detail": "Database.UpdateOperation",
+        "info": "The update options of the movement operation"
+      }
+    }
+  },
+  "TokenDocument.PseudoActorCollection": {
+    "type": "interface",
+    "detail": "TokenDocument.PseudoActorCollection",
+    "instanceChildren": {
+      "documentClass": {
+        "type": "property",
+        "detail": "Actor.ImplementationClass"
+      }
+    },
+    "extends": [
+      "Collection"
+    ]
+  },
+  "TokenDocument.MeasuredMovementWaypoint": {
+    "type": "interface",
+    "detail": "TokenDocument.MeasuredMovementWaypoint",
+    "extends": [
+      "SchemaField.InitializedData"
+    ]
+  },
+  "TokenDocument.CompleteMovementWaypoint": {
+    "type": "interface",
+    "detail": "TokenDocument.CompleteMovementWaypoint",
+    "extends": [
+      "Omit"
+    ]
   }
 }

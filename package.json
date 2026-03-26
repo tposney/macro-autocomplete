@@ -24,8 +24,8 @@
 		"printWidth": 120
 	},
 	"devDependencies": {
-		"esbuild": "^0.24.0",
 		"del": "^6.0.0",
+		"esbuild": "^0.24.0",
 		"fvtt-types": "github:League-of-Foundry-Developers/foundry-vtt-types#main",
 		"gulp": "^4.0.2",
 		"gulp-cli": "^2.3.0",
@@ -34,5 +34,9 @@
 		"gulp-zip": "^5.0.2",
 		"json-stringify-pretty-compact": "^3.0.0",
 		"typescript": "~5.7"
+	},
+	"dependencies": {
+		"acorn": "^8.16.0",
+		"blockly": "^12.4.1"
 	}
 }

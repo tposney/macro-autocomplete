@@ -1,0 +1,145 @@
+<div class="standard-form">
+  <fieldset>
+    <legend>Identity</legend>
+    <div class="form-group">
+      <label>ID</label>
+      <div class="form-fields">
+        <input type="text" name="id" value="{{vista.id}}" {{#unless vista.custom}}disabled{{/unless}}>
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Label</label>
+      <div class="form-fields">
+        <input type="text" name="label" value="{{vista.label}}" {{#unless vista.custom}}disabled{{/unless}}>
+      </div>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Canvas Dimensions</legend>
+    <div class="form-group slim">
+      <label>Canvas Size</label>
+      <div class="form-fields">
+        <label>W</label>
+        <input type="number" name="dimensions.canvas.width" value="{{vista.dimensions.canvas.width}}"
+               {{#unless vista.custom}}disabled{{/unless}}>
+        <label>H</label>
+        <input type="number" name="dimensions.canvas.height" value="{{vista.dimensions.canvas.height}}"
+               {{#unless vista.custom}}disabled{{/unless}}>
+      </div>
+    </div>
+    <div class="form-group slim">
+      <label>View Size</label>
+      <div class="form-fields">
+        <label>W</label>
+        <input type="number" name="dimensions.view.width" value="{{vista.dimensions.view.width}}"
+               {{#unless vista.custom}}disabled{{/unless}}>
+        <label>H</label>
+        <input type="number" name="dimensions.view.height" value="{{vista.dimensions.view.height}}"
+               {{#unless vista.custom}}disabled{{/unless}}>
+      </div>
+    </div>
+    <div class="form-group slim">
+      <label>Initial Position</label>
+      <div class="form-fields">
+        <label>X</label>
+        <input type="number" name="dimensions.initial.x" value="{{vista.dimensions.initial.x}}"
+               placeholder="center" {{#unless vista.custom}}disabled{{/unless}}>
+        <label>Y</label>
+        <input type="number" name="dimensions.initial.y" value="{{vista.dimensions.initial.y}}"
+               placeholder="center" {{#unless vista.custom}}disabled{{/unless}}>
+      </div>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Token Scaling</legend>
+    <div class="form-group slim">
+      <label>Nearest (foreground)</label>
+      <div class="form-fields">
+        <label>Y</label>
+        <input type="number" name="tokens.nearest.y" value="{{vista.tokens.nearest.y}}"
+               {{#unless vista.custom}}disabled{{/unless}}>
+        <label>Elev</label>
+        <input type="number" name="tokens.nearest.elevation" value="{{vista.tokens.nearest.elevation}}"
+               {{#unless vista.custom}}disabled{{/unless}}>
+        <label>Scale</label>
+        <input type="number" name="tokens.nearest.scale" value="{{vista.tokens.nearest.scale}}"
+               step="0.05" {{#unless vista.custom}}disabled{{/unless}}>
+      </div>
+    </div>
+    <div class="form-group slim">
+      <label>Farthest (background)</label>
+      <div class="form-fields">
+        <label>Y</label>
+        <input type="number" name="tokens.farthest.y" value="{{vista.tokens.farthest.y}}"
+               {{#unless vista.custom}}disabled{{/unless}}>
+        <label>Elev</label>
+        <input type="number" name="tokens.farthest.elevation" value="{{vista.tokens.farthest.elevation}}"
+               {{#unless vista.custom}}disabled{{/unless}}>
+        <label>Scale</label>
+        <input type="number" name="tokens.farthest.scale" value="{{vista.tokens.farthest.scale}}"
+               step="0.05" {{#unless vista.custom}}disabled{{/unless}}>
+      </div>
+    </div>
+    <div class="form-group slim">
+      <label>Distance Pixels</label>
+      <div class="form-fields">
+        <input type="number" name="tokens.distancePixels" value="{{vista.tokens.distancePixels}}"
+               placeholder="auto" {{#unless vista.custom}}disabled{{/unless}}>
+      </div>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Spritesheets</legend>
+    {{#each spritesheets as |ss|}}
+    <div class="form-group slim spritesheet-row" data-ss-key="{{ss.key}}">
+      <label>{{ss.key}}</label>
+      <div class="form-fields">
+        <input type="text" name="spritesheets.{{ss.key}}" value="{{ss.path}}"
+               placeholder="modules/ember/assets/vistas/..." {{#unless ../vista.custom}}disabled{{/unless}}>
+        {{#if ../vista.custom}}
+        <a data-action="removeSpritesheet" data-ss-key="{{ss.key}}" data-tooltip="Remove">
+          <i class="fa-solid fa-trash"></i>
+        </a>
+        {{/if}}
+      </div>
+    </div>
+    {{/each}}
+    {{#if vista.custom}}
+    <div class="form-group slim">
+      <a data-action="addSpritesheet" class="button"><i class="fa-solid fa-plus"></i> Add Spritesheet</a>
+    </div>
+    {{/if}}
+  </fieldset>
+
+  <fieldset>
+    <legend>Weather</legend>
+    <div class="form-group slim">
+      <label>Elevation</label>
+      <div class="form-fields">
+        <input type="number" name="weather.elevation" value="{{vista.weather.elevation}}"
+               placeholder="0" {{#unless vista.custom}}disabled{{/unless}}>
+      </div>
+    </div>
+  </fieldset>
+
+  {{#if vista.custom}}
+  <footer class="form-footer">
+    <button type="button" data-action="saveVista"><i class="fa-solid fa-save"></i> Save</button>
+    <button type="button" data-action="exportVista" data-vista-id="{{vista.id}}">
+      <i class="fa-solid fa-file-export"></i> Export JSON
+    </button>
+  </footer>
+  {{else}}
+  <footer class="form-footer">
+    <button type="button" data-action="duplicateVista" data-vista-id="{{vista.id}}">
+      <i class="fa-solid fa-copy"></i> Duplicate as Custom
+    </button>
+    <button type="button" data-action="exportVista" data-vista-id="{{vista.id}}">
+      <i class="fa-solid fa-file-export"></i> Export JSON
+    </button>
+  </footer>
+  {{/if}}
+</div>

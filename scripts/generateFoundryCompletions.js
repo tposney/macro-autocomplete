@@ -202,6 +202,28 @@ function extractMemberInfo(member, sourceFile) {
   return null;
 }
 
+/**
+ * Extract the extends clause type names from an interface or class declaration.
+ * Returns simplified type names (e.g., "Scene.Dimensions" from "Scene.Dimensions").
+ */
+function getExtendsTypes(node, sourceFile) {
+  const result = [];
+  if (!node.heritageClauses) return result;
+  for (const clause of node.heritageClauses) {
+    if (clause.token === ts.SyntaxKind.ExtendsKeyword) {
+      for (const type of clause.types) {
+        try {
+          const typeText = type.expression.getText(sourceFile);
+          result.push(simplifyType(typeText));
+        } catch {
+          // Skip
+        }
+      }
+    }
+  }
+  return result;
+}
+
 function extractTypeMembers(decl, sourceFile) {
   const typeName = decl.name?.getText(sourceFile) || "unknown";
   const isClass = ts.isClassDeclaration(decl);
@@ -239,12 +261,14 @@ function extractTypeMembers(decl, sourceFile) {
 function findTypeDeclarations(sourceFile) {
   const fileName = sourceFile.fileName;
 
-  function visit(node) {
+  function visit(node, namespacePrefix) {
     if (ts.isInterfaceDeclaration(node) || ts.isClassDeclaration(node)) {
       try {
         const name = node.name?.getText(sourceFile);
-        if (name && TARGET_TYPES[name]) {
-          // Store all candidates for this type
+        if (!name) return;
+
+        // Check if it's a top-level TARGET_TYPE
+        if (!namespacePrefix && TARGET_TYPES[name]) {
           if (!foundTypes.has(name)) {
             foundTypes.set(name, []);
           }
@@ -256,14 +280,44 @@ function findTypeDeclarations(sourceFile) {
             memberCount: node.members?.length || 0,
           });
         }
+
+        // If inside a namespace that's a TARGET_TYPE, collect as "Namespace.Name"
+        if (namespacePrefix && TARGET_TYPES[namespacePrefix]) {
+          const qualifiedName = `${namespacePrefix}.${name}`;
+          if (!foundTypes.has(qualifiedName)) {
+            foundTypes.set(qualifiedName, []);
+          }
+          foundTypes.get(qualifiedName).push({
+            node,
+            sourceFile,
+            fileName,
+            isClass: ts.isClassDeclaration(node),
+            memberCount: node.members?.length || 0,
+            isNestedType: true,
+          });
+        }
       } catch {
         // Skip problematic nodes
       }
     }
-    ts.forEachChild(node, visit);
+
+    // Descend into namespace/module declarations to find nested interfaces
+    if (ts.isModuleDeclaration(node)) {
+      try {
+        const nsName = node.name?.getText(sourceFile);
+        // Only descend into namespaces whose name matches a TARGET_TYPE
+        if (nsName && TARGET_TYPES[nsName] && node.body) {
+          ts.forEachChild(node.body, child => visit(child, nsName));
+        }
+      } catch {
+        // Skip
+      }
+    }
+
+    ts.forEachChild(node, child => visit(child, namespacePrefix));
   }
 
-  visit(sourceFile);
+  visit(sourceFile, null);
 }
 
 /**
@@ -350,14 +404,16 @@ function generateCompletions() {
     }
   }
 
-  console.log(`Found ${foundTypes.size} target types: ${[...foundTypes.keys()].join(", ")}`);
+  const mainTypeCount = [...foundTypes.keys()].filter(k => !k.includes(".")).length;
+  const nestedTypeCount = [...foundTypes.keys()].filter(k => k.includes(".")).length;
+  console.log(`Found ${mainTypeCount} main types + ${nestedTypeCount} nested types`);
 
-  // Generate completions - select best candidate for each type
+  // Pass 1: Generate completions for main (non-nested) TARGET_TYPES
   const completions = {};
 
   for (const [typeName, candidates] of foundTypes) {
     const best = selectBestCandidate(typeName, candidates);
-    if (!best) continue;
+    if (!best || best.isNestedType) continue;
 
     try {
       const entry = extractTypeMembers(best.node, best.sourceFile);
@@ -393,6 +449,84 @@ function generateCompletions() {
       const shortPath = best.fileName.replace(/.*fvtt-types\/src\//, "");
       const ctorInfo = entry.constructorDetail ? `, ctor: ${entry.constructorDetail}` : "";
       console.log(`  ${typeName}: ${staticCount} static + ${instanceCount} instance members (from ${shortPath})${ctorInfo}`);
+    } catch (err) {
+      console.error(`  Error processing ${typeName}:`, err.message);
+    }
+  }
+
+  // Pass 2: Collect all type names referenced by property detail strings in main types.
+  // Only include nested types that are actually used as property types.
+  const referencedTypes = new Set();
+  function collectReferencedTypes(children) {
+    for (const [, entry] of Object.entries(children)) {
+      if (entry.detail && typeof entry.detail === "string") {
+        // Extract qualified type names (e.g., "Canvas.Dimensions" from "Canvas.Dimensions | null")
+        const matches = entry.detail.match(/\b([A-Z][A-Za-z0-9]+\.[A-Z][A-Za-z0-9]+)\b/g);
+        if (matches) {
+          for (const m of matches) referencedTypes.add(m);
+        }
+      }
+    }
+  }
+  for (const [, typeEntry] of Object.entries(completions)) {
+    if (typeEntry.staticChildren) collectReferencedTypes(typeEntry.staticChildren);
+    if (typeEntry.instanceChildren) collectReferencedTypes(typeEntry.instanceChildren);
+  }
+
+  // Also resolve extends chains: if a referenced type extends another nested type, include that too
+  function resolveExtendsChain(typeName) {
+    const candidates = foundTypes.get(typeName);
+    if (!candidates) return;
+    const best = selectBestCandidate(typeName, candidates);
+    if (!best) return;
+    const extendsTypes = getExtendsTypes(best.node, best.sourceFile);
+    for (const parentType of extendsTypes) {
+      if (foundTypes.has(parentType) && !referencedTypes.has(parentType)) {
+        referencedTypes.add(parentType);
+        resolveExtendsChain(parentType);
+      }
+    }
+  }
+  for (const refType of [...referencedTypes]) {
+    resolveExtendsChain(refType);
+  }
+
+  console.log(`\n  Referenced nested types: ${referencedTypes.size}`);
+
+  // Pass 3: Generate completions for referenced nested types only
+  for (const typeName of referencedTypes) {
+    const candidates = foundTypes.get(typeName);
+    if (!candidates) continue;
+    const best = selectBestCandidate(typeName, candidates);
+    if (!best) continue;
+
+    try {
+      const entry = extractTypeMembers(best.node, best.sourceFile);
+      const allChildren = { ...entry.instanceChildren, ...entry.staticChildren };
+
+      const output = {
+        type: "interface",
+        detail: typeName,
+      };
+      if (Object.keys(allChildren).length > 0) {
+        output.instanceChildren = allChildren;
+      }
+
+      // Capture extends clause for parent type resolution
+      const extendsTypes = getExtendsTypes(best.node, best.sourceFile);
+      if (extendsTypes.length > 0) {
+        output.extends = extendsTypes;
+      }
+
+      // Skip if no members and no extends
+      if (Object.keys(allChildren).length === 0 && extendsTypes.length === 0) continue;
+
+      completions[typeName] = output;
+
+      const memberCount = Object.keys(allChildren).length;
+      const shortPath = best.fileName.replace(/.*fvtt-types\/src\//, "");
+      const extendsInfo = extendsTypes.length > 0 ? ` (extends ${extendsTypes.join(", ")})` : "";
+      console.log(`  ${typeName}: ${memberCount} members (nested type from ${shortPath})${extendsInfo}`);
     } catch (err) {
       console.error(`  Error processing ${typeName}:`, err.message);
     }

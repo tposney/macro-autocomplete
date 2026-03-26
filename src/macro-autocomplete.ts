@@ -24,21 +24,23 @@
 // Import generated completions from fvtt-types (run: node scripts/generateFoundryCompletions.js)
 import foundryCompletions from "./lib/foundryCompletions.json";
 
-// Completion tree: each node has children (next segments) or is a leaf with type/detail/info
-interface CompletionEntry {
-  type?: string;
-  detail?: string;
-  info?: string;
-  children?: CompletionNode;          // Structural sub-properties (schema data, sub-objects, namespaces)
-  staticChildren?: CompletionNode;    // Static class members (e.g., Actor.create)
-  instanceChildren?: CompletionNode;  // Instance members (e.g., actor.update)
-  constructorDetail?: string; // e.g. "(formula, data?) => Roll" - for signature hints on `new ClassName(`
-  returnType?: string; // Class name whose instanceChildren to use for the return value
-}
+// Blockly visual editor configuration (no Blockly dependency — safe to import eagerly)
+import { registerBlockColours, registerScopeMergeKeys, registerCategoryConfigs } from "./blockly/blocklyConfig";
 
-interface CompletionNode {
-  [key: string]: CompletionEntry;
-}
+// CPR parameter name overrides (registers its own Hooks.once)
+import "./cprCompletions";
+
+
+// Shared completion resolution logic (used by both text and visual editors)
+import {
+  type CompletionEntry, type CompletionNode,
+  setCompletionTree,
+  extractTypeName, extractReturnType, extractRawElementType, extractElementType,
+  detailSpecificity, mergeCompletions,
+  getVisibleChildren, getCompletionsForPath,
+  getInstanceCompletions, resolveMethodReturnType,
+  inferVariableCompletions, resolveIterableElementType,
+} from "./completionResolver";
 
 // Use let so we can augment with schema-generated completions at runtime
 let COMPLETION_TREE: CompletionNode = {
@@ -71,6 +73,11 @@ let COMPLETION_TREE: CompletionNode = {
     children: {}
   },
 
+  _token: {
+    type: "variable", detail: "Token", info: "The currently selected token on the canvas (canvas.tokens.controlled[0])",
+    children: {}
+  },
+
   actor: {
     type: "variable", detail: "Actor", info: "Actor instance (always available in macros via Macro#executeScript)",
     children: {
@@ -80,6 +87,25 @@ let COMPLETION_TREE: CompletionNode = {
         type: "property", detail: "object", info: "Actor system data (populated from system schema)",
         children: {}
       },
+    },
+    // Pre-populate key dnd5e Actor methods with proper signatures.
+    // These may be wrapped by libWrapper (midi-qol, etc.) which converts them to
+    // getter+setter pairs that throw on prototype access, making runtime discovery
+    // produce generic signatures. These entries ensure good completions regardless.
+    instanceChildren: {
+      rollSkill: { type: "method", detail: "(config?, dialog?, message?) => Promise<D20Roll[]|null>", info: "Roll a skill check" },
+      rollToolCheck: { type: "method", detail: "(config?, dialog?, message?) => Promise<D20Roll[]|null>", info: "Roll a tool check" },
+      rollAbilityCheck: { type: "method", detail: "(config?, dialog?, message?) => Promise<D20Roll[]|null>", info: "Roll an ability check" },
+      rollAbilityTest: { type: "method", detail: "(config?, dialog?, message?) => Promise<D20Roll[]|null>", info: "Roll an ability test (alias for rollAbilityCheck)" },
+      rollSavingThrow: { type: "method", detail: "(config?, dialog?, message?) => Promise<D20Roll[]|null>", info: "Roll a saving throw" },
+      rollDeathSave: { type: "method", detail: "(config?, dialog?, message?) => Promise<D20Roll[]|null>", info: "Roll a death saving throw" },
+      rollConcentration: { type: "method", detail: "(config?, dialog?, message?) => Promise<D20Roll[]|null>", info: "Roll a concentration check" },
+      rollInitiative: { type: "method", detail: "(options?) => Promise<Combatant|null>", info: "Roll initiative for this actor" },
+      rollHitDie: { type: "method", detail: "(config?, dialog?, message?) => Promise<DamageRoll|null>", info: "Roll a hit die for HP recovery" },
+      shortRest: { type: "method", detail: "(config?) => Promise<RestResult>", info: "Take a short rest" },
+      longRest: { type: "method", detail: "(config?) => Promise<RestResult>", info: "Take a long rest" },
+      applyDamage: { type: "method", detail: "(damage, options?) => Promise<Actor>", info: "Apply damage or healing to this actor" },
+      applyTempHP: { type: "method", detail: "(amount) => Promise<Actor>", info: "Apply temporary hit points" },
     }
   },
 
@@ -246,50 +272,6 @@ function schemaToCompletions(schema: any): CompletionNode {
 }
 
 /**
- * Merge a set of completions into a target node's children.
- * Creates the children object if it doesn't exist.
- */
-function mergeCompletions(target: { children?: CompletionNode }, additions: CompletionNode): void {
-  if (!target.children) {
-    target.children = {};
-  }
-  for (const [key, value] of Object.entries(additions)) {
-    if (!(key in target.children)) {
-      // New entry — add it
-      target.children[key] = value;
-    } else {
-      const existing = target.children[key];
-      // Enrich existing entry if the addition has better type info
-      if (value.detail && existing.detail) {
-        const existingIsWeak = existing.detail === "any" || existing.detail === "object"
-          || existing.detail === "Promise<any>" || existing.detail === "any | null";
-        const additionIsStrong = value.detail !== "any" && value.detail !== "object"
-          && value.detail !== "Promise<any>" && value.detail !== "any | null";
-        if (existingIsWeak && additionIsStrong) {
-          existing.detail = value.detail;
-        }
-      }
-      // Copy info if the existing entry lacks it
-      if (value.info && !existing.info) {
-        existing.info = value.info;
-      }
-      // Copy constructorDetail if the existing entry lacks it
-      if (value.constructorDetail && !existing.constructorDetail) {
-        existing.constructorDetail = value.constructorDetail;
-      }
-      // Copy returnType if the existing entry lacks it
-      if (value.returnType && !existing.returnType) {
-        existing.returnType = value.returnType;
-      }
-      // Recursively merge children
-      if (value.children) {
-        mergeCompletions(existing, value.children);
-      }
-    }
-  }
-}
-
-/**
  * Inject schema-generated completions for system actors and items.
  * Uses CONFIG.Actor.dataModels and CONFIG.Item.dataModels which are
  * generic Foundry structures (Record<string, TypeDataModel>) populated
@@ -313,7 +295,7 @@ function injectSchemaCompletions(): void {
     const actorDataModels = cfg.Actor?.dataModels;
     if (actorDataModels && typeof actorDataModels === "object" && COMPLETION_TREE.actor?.children?.system) {
       let count = 0;
-      for (const [typeName, DataModel] of Object.entries(actorDataModels) as [string, any][]) {
+      for (const [_typeName, DataModel] of Object.entries(actorDataModels) as [string, any][]) {
         if (DataModel?.schema) {
           const schemaCompletions = schemaToCompletions(DataModel.schema);
           mergeCompletions(COMPLETION_TREE.actor.children.system, schemaCompletions);
@@ -333,7 +315,7 @@ function injectSchemaCompletions(): void {
     const itemDataModels = cfg.Item?.dataModels;
     if (itemDataModels && typeof itemDataModels === "object" && COMPLETION_TREE.item?.children?.system) {
       let count = 0;
-      for (const [typeName, DataModel] of Object.entries(itemDataModels) as [string, any][]) {
+      for (const [_typeName, DataModel] of Object.entries(itemDataModels) as [string, any][]) {
         if (DataModel?.schema) {
           const schemaCompletions = schemaToCompletions(DataModel.schema);
           mergeCompletions(COMPLETION_TREE.item.children.system, schemaCompletions);
@@ -458,6 +440,10 @@ function injectSchemaCompletions(): void {
       fieldToCompletionNode,
       setContextCompletions,
       clearContextCompletions,
+      // Visual editor (Blockly) configuration — callable before Blockly loads
+      registerCategoryConfigs,
+      registerBlockColours,
+      registerScopeMergeKeys,
     };
 
     // Expose as module API (game.modules.get("macro-autocomplete").api)
@@ -516,6 +502,7 @@ function injectFoundryCompletions(): void {
         children?: CompletionNode; // legacy format fallback
         instancePath?: string;
         constructorDetail?: string;
+        extends?: string[]; // parent type names for interface inheritance
       };
 
       const staticChildren = entry.staticChildren || {};
@@ -553,6 +540,14 @@ function injectFoundryCompletions(): void {
           COMPLETION_TREE[typeName].instanceChildren = {};
         }
         mergeCompletions({ children: COMPLETION_TREE[typeName].instanceChildren }, instanceChildren);
+      }
+
+      // Preserve extends chain for interface inheritance resolution
+      if (entry.extends && entry.extends.length > 0) {
+        if (!COMPLETION_TREE[typeName]) {
+          COMPLETION_TREE[typeName] = { type: entry.type || "interface", detail: entry.detail || typeName };
+        }
+        COMPLETION_TREE[typeName].extends = entry.extends;
       }
 
       // Merge instance members into known runtime globals
@@ -607,6 +602,29 @@ interface ClassCompletions {
  * Static chain: cls → parent → ... → stop at Function.prototype/Object
  * Instance chain: cls.prototype → parent prototype → ... → stop at Object.prototype
  */
+/**
+ * Extract the parameter list from a function's toString() output.
+ * Handles balanced parentheses/braces for destructured params like
+ * `({yes={}, no={}, ...config}={})`.
+ */
+function extractParamString(fnStr: string): string {
+  // Find the opening paren, skipping async/function/name keywords
+  const start = fnStr.indexOf("(");
+  if (start === -1) return "()";
+
+  // Walk forward, tracking nested parens/braces/brackets
+  let depth = 0;
+  for (let i = start; i < fnStr.length; i++) {
+    const ch = fnStr[i];
+    if (ch === "(" || ch === "{" || ch === "[") depth++;
+    else if (ch === ")" || ch === "}" || ch === "]") {
+      depth--;
+      if (depth === 0) return fnStr.slice(start, i + 1);
+    }
+  }
+  return "()";
+}
+
 function classToCompletions(cls: any): ClassCompletions {
   const result: ClassCompletions = {
     staticChildren: {},
@@ -628,12 +646,11 @@ function classToCompletions(cls: any): ClassCompletions {
   ]);
 
   /** Extract a completion entry from a property descriptor, or null to skip. */
-  function extractMember(descriptor: PropertyDescriptor): CompletionEntry | null {
+  function extractMember(descriptor: PropertyDescriptor, obj?: any, name?: string): CompletionEntry | null {
     if (typeof descriptor.value === "function") {
       const fn = descriptor.value;
       const fnStr = fn.toString();
-      const match = fnStr.match(/^(?:async\s+)?(?:function\s*\w*\s*)?(\([^)]*\))|^(?:async\s+)?(\([^)]*\))\s*=>|^(?:async\s+)?\w+\s*(\([^)]*\))/);
-      const params = match ? (match[1] || match[2] || match[3] || "()") : "()";
+      const params = extractParamString(fnStr);
       const isAsync = fnStr.trimStart().startsWith("async");
       const returnHint = isAsync ? "Promise<any>" : "any";
       return { type: "method", detail: `${params} => ${returnHint}` };
@@ -641,14 +658,33 @@ function classToCompletions(cls: any): ClassCompletions {
       // Read-only getter — treat as a property
       return { type: "property", detail: "any" };
     } else if (descriptor.get && descriptor.set) {
-      // Getter+setter pair (likely libWrapper interception) — skip to find real definition deeper
-      return null;
+      // Getter+setter pair (e.g., libWrapper interception) — try to resolve the
+      // underlying function by calling the getter on the prototype
+      if (obj && name) {
+        try {
+          const resolved = descriptor.get.call(obj);
+          if (typeof resolved === "function") {
+            const fnStr = resolved.toString();
+            const params = extractParamString(fnStr);
+            const isAsync = fnStr.trimStart().startsWith("async");
+            const returnHint = isAsync ? "Promise<any>" : "any";
+            return { type: "method", detail: `${params} => ${returnHint}` };
+          }
+        } catch {
+          // Getter threw (common with libWrapper on prototype without instance data).
+          // Treat as a method with unknown signature rather than skipping entirely.
+          return { type: "method", detail: "(...args) => any" };
+        }
+      }
+      // Still a getter+setter but no obj/name to test — treat as method
+      return { type: "method", detail: "(...args) => any" };
     }
     return null;
   }
 
   // Walk static members on the class chain
   let current = cls;
+  let isOwn = true;
   while (current && current !== Function.prototype && current !== Object) {
     for (const name of Object.getOwnPropertyNames(current)) {
       if (name.startsWith("_") || name.startsWith("#")) continue;
@@ -658,16 +694,21 @@ function classToCompletions(cls: any): ClassCompletions {
       try {
         const descriptor = Object.getOwnPropertyDescriptor(current, name);
         if (!descriptor) continue;
-        const entry = extractMember(descriptor);
-        if (entry) result.staticChildren[name] = entry;
+        const entry = extractMember(descriptor, current, name);
+        if (entry) {
+          if (!isOwn) entry.inherited = true;
+          result.staticChildren[name] = entry;
+        }
       } catch { /* skip inaccessible properties */ }
     }
     current = Object.getPrototypeOf(current);
+    isOwn = false;
   }
 
   // Walk instance members on the prototype chain
   if (cls.prototype) {
     let proto = cls.prototype;
+    isOwn = true;
     while (proto && proto !== Object.prototype) {
       for (const name of Object.getOwnPropertyNames(proto)) {
         if (name.startsWith("_") || name.startsWith("#")) continue;
@@ -677,11 +718,15 @@ function classToCompletions(cls: any): ClassCompletions {
         try {
           const descriptor = Object.getOwnPropertyDescriptor(proto, name);
           if (!descriptor) continue;
-          const entry = extractMember(descriptor);
-          if (entry) result.instanceChildren[name] = entry;
+          const entry = extractMember(descriptor, proto, name);
+          if (entry) {
+            if (!isOwn) entry.inherited = true;
+            result.instanceChildren[name] = entry;
+          }
         } catch { /* skip properties that throw on access */ }
       }
       proto = Object.getPrototypeOf(proto);
+      isOwn = false;
     }
   }
 
@@ -721,7 +766,7 @@ function injectPrototypeCompletions(): void {
   }> = [
     { configPath: "Actor.documentClass", variableKeys: ["actor", "character"], classKey: "Actor", label: "Actor" },
     { configPath: "Item.documentClass", variableKeys: ["item"], classKey: "Item", label: "Item" },
-    { configPath: "Token.objectClass", variableKeys: ["token"], classKey: "Token", label: "Token" },
+    { configPath: "Token.objectClass", variableKeys: ["token", "_token"], classKey: "Token", label: "Token" },
     { configPath: "ChatMessage.documentClass", classKey: "ChatMessage", label: "ChatMessage" },
     { configPath: "ActiveEffect.documentClass", classKey: "ActiveEffect", label: "ActiveEffect" },
     { configPath: "Scene.documentClass", classKey: "Scene", label: "Scene" },
@@ -748,7 +793,10 @@ function injectPrototypeCompletions(): void {
           if (!target) continue;
           if (!target.instanceChildren) target.instanceChildren = {};
           mergeCompletions({ children: target.instanceChildren }, walked.instanceChildren);
-          console.log(`macro-autocomplete | Injected ${Object.keys(walked.instanceChildren).length} instance members for ${label} → ${treeKey}`);
+          // Log notable methods for diagnostics
+          const notable = ["rollSkill", "rollSavingThrow", "rollAbilityCheck", "shortRest", "applyDamage"];
+          const found = notable.filter(m => walked.instanceChildren[m]);
+          console.log(`macro-autocomplete | Injected ${Object.keys(walked.instanceChildren).length} instance members for ${label} → ${treeKey}${found.length ? ` (includes: ${found.join(", ")})` : ""}`);
         }
       }
 
@@ -843,8 +891,7 @@ function valueToCompletionEntry(value: any, maxDepth: number = 3): CompletionEnt
     }
     // Regular function
     const fnStr = value.toString();
-    const match = fnStr.match(/^(?:function\s*\w*\s*)?(\([^)]*\))|^(\([^)]*\))\s*=>/);
-    const params = match ? (match[1] || match[2]) : "()";
+    const params = extractParamString(fnStr);
     return { type: "function", detail: `${params} => any`, info: value.name || "function" };
   }
 
@@ -982,6 +1029,43 @@ function injectConfigCompletions(): void {
   }
 }
 
+/** Well-known children for built-in JS types whose native methods have no parameter names in toString(). */
+const BUILTIN_TYPE_CHILDREN: Record<string, CompletionNode> = {
+  Set: {
+    add: { type: "method", detail: "(value) => Set", info: "Add a value to the set" },
+    clear: { type: "method", detail: "() => void", info: "Remove all elements" },
+    delete: { type: "method", detail: "(value) => boolean", info: "Remove an element, returns true if it existed" },
+    has: { type: "method", detail: "(value) => boolean", info: "Check if a value exists in the set" },
+    forEach: { type: "method", detail: "(callback, thisArg?) => void", info: "Execute a function for each value" },
+    size: { type: "property", detail: "number", info: "Number of elements in the set" },
+    values: { type: "method", detail: "() => Iterator", info: "Returns an iterator of values" },
+    entries: { type: "method", detail: "() => Iterator", info: "Returns an iterator of [value, value] pairs" },
+    keys: { type: "method", detail: "() => Iterator", info: "Returns an iterator of values (same as values())" },
+    // Foundry VTT Collection/Set extensions
+    first: { type: "method", detail: "() => T | undefined", info: "Get the first element" },
+    last: { type: "method", detail: "() => T | undefined", info: "Get the last element" },
+    find: { type: "method", detail: "(predicate) => T | undefined", info: "Find the first element matching a predicate" },
+    filter: { type: "method", detail: "(predicate) => T[]", info: "Filter elements matching a predicate" },
+    map: { type: "method", detail: "(fn) => U[]", info: "Map elements to a new array" },
+    some: { type: "method", detail: "(predicate) => boolean", info: "Test if any element matches a predicate" },
+    every: { type: "method", detail: "(predicate) => boolean", info: "Test if all elements match a predicate" },
+    reduce: { type: "method", detail: "(fn, initial) => U", info: "Reduce elements to a single value" },
+    contents: { type: "property", detail: "T[]", info: "Array of elements in the set" },
+  },
+  Map: {
+    get: { type: "method", detail: "(key) => any", info: "Get the value for a key" },
+    set: { type: "method", detail: "(key, value) => Map", info: "Set a key-value pair" },
+    has: { type: "method", detail: "(key) => boolean", info: "Check if a key exists" },
+    delete: { type: "method", detail: "(key) => boolean", info: "Remove a key-value pair" },
+    clear: { type: "method", detail: "() => void", info: "Remove all key-value pairs" },
+    forEach: { type: "method", detail: "(callback, thisArg?) => void", info: "Execute a function for each entry" },
+    size: { type: "property", detail: "number", info: "Number of key-value pairs" },
+    keys: { type: "method", detail: "() => Iterator", info: "Returns an iterator of keys" },
+    values: { type: "method", detail: "() => Iterator", info: "Returns an iterator of values" },
+    entries: { type: "method", detail: "() => Iterator", info: "Returns an iterator of [key, value] pairs" },
+  },
+};
+
 /**
  * Walk a runtime object and extract its properties, methods, and getters as completions.
  * Handles both own properties (data values) and prototype members (methods/getters).
@@ -1032,8 +1116,7 @@ function objectToCompletions(obj: any, maxDepth: number = 2): CompletionNode {
         } else {
           // Regular function
           const fnStr = value.toString();
-          const match = fnStr.match(/^(?:async\s+)?(?:function\s*\w*\s*)?(\([^)]*\))|^(?:async\s+)?(\([^)]*\))\s*=>|^(?:async\s+)?\w+\s*(\([^)]*\))/);
-          const params = match ? (match[1] || match[2] || match[3] || "()") : "()";
+          const params = extractParamString(fnStr);
           const isAsync = fnStr.trimStart().startsWith("async");
           const returnHint = isAsync ? "Promise<any>" : "any";
           children[key] = { type: "function", detail: `${params} => ${returnHint}` };
@@ -1041,16 +1124,28 @@ function objectToCompletions(obj: any, maxDepth: number = 2): CompletionNode {
       } else if (vType === "object") {
         if (Array.isArray(value)) {
           children[key] = { type: "property", detail: `array[${value.length}]` };
-        } else if (maxDepth > 0) {
-          const subChildren = objectToCompletions(value, maxDepth - 1);
-          const entry: CompletionEntry = {
-            type: "property",
-            detail: value.constructor?.name || "object",
-          };
-          if (Object.keys(subChildren).length > 0) entry.children = subChildren;
-          children[key] = entry;
         } else {
-          children[key] = { type: "property", detail: value.constructor?.name || "object" };
+          const ctorName = value.constructor?.name || "object";
+          const builtinChildren = BUILTIN_TYPE_CHILDREN[ctorName];
+          if (builtinChildren) {
+            // Use well-known children for built-in types (Set, Map) whose
+            // native methods lose parameter names in Function.toString().
+            children[key] = {
+              type: "property",
+              detail: ctorName,
+              children: { ...builtinChildren },
+            };
+          } else if (maxDepth > 0) {
+            const subChildren = objectToCompletions(value, maxDepth - 1);
+            const entry: CompletionEntry = {
+              type: "property",
+              detail: ctorName,
+            };
+            if (Object.keys(subChildren).length > 0) entry.children = subChildren;
+            children[key] = entry;
+          } else {
+            children[key] = { type: "property", detail: ctorName };
+          }
         }
       } else if (vType === "string") {
         children[key] = { type: "property", detail: "string" };
@@ -1131,11 +1226,13 @@ function injectGlobalCompletions(): void {
   }
 
   // canvas — the Canvas instance
+  // Initial introspection at ready time; scene-dependent properties (dimensions
+  // etc.) are null until canvasReady, so a deferred re-introspection handles those.
   if (g.canvas) {
     if (!COMPLETION_TREE.canvas) {
       COMPLETION_TREE.canvas = { type: "object", detail: "Canvas", info: "The game canvas" };
     }
-    const canvasMembers = objectToCompletions(g.canvas, 2);
+    const canvasMembers = objectToCompletions(g.canvas, 4);
     mergeCompletions(COMPLETION_TREE.canvas, canvasMembers);
     console.log(`macro-autocomplete | Injected ${Object.keys(canvasMembers).length} canvas members`);
   }
@@ -1214,6 +1311,16 @@ function injectGlobalCompletions(): void {
       mergeCompletions(COMPLETION_TREE[systemId], systemMembers);
       console.log(`macro-autocomplete | Injected ${Object.keys(systemMembers).length} ${systemId} system members`);
     }
+  }
+
+  // chris-premades (CPR) global — provides utils, Summons, Crosshairs, etc.
+  if (g.chrisPremades && typeof g.chrisPremades === "object") {
+    if (!COMPLETION_TREE.chrisPremades) {
+      COMPLETION_TREE.chrisPremades = { type: "object", detail: "object", info: "chris-premades (CPR) module namespace" };
+    }
+    const cprMembers = objectToCompletions(g.chrisPremades, 3);
+    mergeCompletions(COMPLETION_TREE.chrisPremades, cprMembers);
+    console.log(`macro-autocomplete | Injected ${Object.keys(cprMembers).length} chrisPremades members`);
   }
 }
 
@@ -1543,7 +1650,7 @@ function updateSignatureHint(view: any): void {
     if (element) {
       const ctxCompletions = elementContextCompletions.get(element);
       if (ctxCompletions) {
-        sig = getSignatureFromTree(ctx.funcPath, ctxCompletions);
+        sig = getSignatureFromTree(ctx.funcPath, ctxCompletions) ?? undefined;
       }
     }
   }
@@ -1570,57 +1677,6 @@ function updateSignatureHint(view: any): void {
   activeTooltip.style.top = `${coords.top - tooltipHeight - 4}px`;
 }
 
-// ── Completion tree navigation ──
-
-/**
- * Get the visible children for an entry based on its type.
- * - Class entries (type="class"): children + staticChildren
- * - Variable/other entries: children + instanceChildren
- */
-function getVisibleChildren(entry: CompletionEntry): CompletionNode {
-  const result: CompletionNode = {};
-  if (entry.children) Object.assign(result, entry.children);
-  if (entry.type === "class") {
-    if (entry.staticChildren) Object.assign(result, entry.staticChildren);
-  } else {
-    if (entry.instanceChildren) Object.assign(result, entry.instanceChildren);
-    // Type-based resolution: if detail names a known class, merge its instance members.
-    // This lets properties like workflow.attackRoll (detail: "D20Roll") show D20Roll methods.
-    // Local children/instanceChildren take precedence (already assigned above).
-    if (entry.detail) {
-      const typeName = entry.detail;
-      if (/^[A-Z]\w*$/.test(typeName)) {
-        const classEntry = COMPLETION_TREE[typeName];
-        if (classEntry?.instanceChildren) {
-          for (const [k, v] of Object.entries(classEntry.instanceChildren)) {
-            if (!result[k]) result[k] = v;
-          }
-        }
-      }
-    }
-  }
-  return result;
-}
-
-/**
- * Navigate the completion tree to find the node at the given path segments.
- * Uses getVisibleChildren() to show the right members based on entry type.
- * Returns the visible children of the deepest matched node.
- * @param segments - dotted path segments to navigate
- * @param root - optional root node (defaults to COMPLETION_TREE)
- */
-function getCompletionsForPath(segments: string[], root?: CompletionNode): CompletionNode | null {
-  let node = root ?? COMPLETION_TREE;
-  for (const seg of segments) {
-    const entry = node[seg];
-    if (!entry) return null;
-    const visible = getVisibleChildren(entry);
-    if (Object.keys(visible).length === 0) return null;
-    node = visible;
-  }
-  return node;
-}
-
 // ── EditorView access ──
 
 /**
@@ -1635,155 +1691,6 @@ function getEditorView(element: HTMLElement): any | null {
     // @ts-expect-error - CodeMirror internal
     if (el?.cmView?.view) return el.cmView.view;
   }
-  return null;
-}
-
-// ── Type inference ──
-
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-/**
- * Extract a class name from a function's detail/return-type string.
- * Handles patterns like:
- *   "(data?) => Promise<Actor.Stored | null>"  → "Actor"
- *   "(formula) => Roll<D>"                      → "Roll"
- *   "(config?) => Item"                          → "Item"
- * Returns null if no known class name can be extracted.
- */
-function extractReturnType(detail: string | undefined): string | null {
-  if (!detail) return null;
-  const arrowMatch = detail.match(/=>\s*(.+)$/);
-  if (!arrowMatch) return null;
-  let ret = arrowMatch[1].trim();
-  // Unwrap Promise<X>, MaybePromise<X>
-  const promiseMatch = ret.match(/^(?:Promise|MaybePromise)<(.+)>$/);
-  if (promiseMatch) ret = promiseMatch[1].trim();
-  // Remove union members: | null, | undefined, | void
-  ret = ret.replace(/\s*\|\s*(?:null|undefined|void)\b/g, "").trim();
-  // Remove sub-type qualifiers: .Stored, .Implementation, .ConfiguredInstance
-  ret = ret.replace(/\.\w+/g, "").trim();
-  // Remove generic parameters: Roll<D> → Roll
-  ret = ret.replace(/<[^>]*>/g, "").trim();
-  // Accept only if it's a simple PascalCase name that exists in the tree
-  if (/^[A-Z]\w*$/.test(ret) && COMPLETION_TREE[ret]) return ret;
-  return null;
-}
-
-// Static factory method names that typically return instances of their class
-const FACTORY_METHOD_NAMES = new Set([
-  "create", "get", "build", "fromData", "fromJSON", "fromDropData",
-  "fromImport", "fromSource", "fromTerms", "createDialog",
-]);
-
-/**
- * Get instance-level completions for a class by name.
- * Checks instanceChildren on the class entry, falling back to children for non-class entries.
- */
-function getInstanceCompletions(className: string): CompletionNode | null {
-  const classEntry = COMPLETION_TREE[className];
-  if (!classEntry) return null;
-  // Prefer instanceChildren (methods/properties available on instances)
-  if (classEntry.instanceChildren && Object.keys(classEntry.instanceChildren).length > 0) {
-    return classEntry.instanceChildren;
-  }
-  // Fall back to children (for entries that don't separate static/instance)
-  return classEntry.children || null;
-}
-
-/**
- * Resolve the return type of a method to a class name, using three strategies:
- * 1. Explicit returnType field on the entry
- * 2. Parse the detail string for a known class name
- * 3. Factory method heuristic (common names like create/get return the class type)
- */
-function resolveMethodReturnType(methodEntry: CompletionEntry, methodName: string, classEntry: CompletionEntry, className: string): string | null {
-  if (methodEntry.returnType && COMPLETION_TREE[methodEntry.returnType]) {
-    return methodEntry.returnType;
-  }
-  const parsed = extractReturnType(methodEntry.detail);
-  if (parsed) return parsed;
-  if (FACTORY_METHOD_NAMES.has(methodName) && classEntry.type === "class") {
-    return className;
-  }
-  return null;
-}
-
-/**
- * Scan the document text for variable assignments and infer what completions the
- * variable should produce. Handles:
- *   const/let/var x = new ClassName(...)           — instance completions for ClassName
- *   const/let/var x = ClassName.method(...)        — uses returnType or detail parsing
- *   const/let/var x = await ClassName.method(...)
- *   const/let/var x = dotted.path                  — resolves path through completion tree
- * Returns a CompletionNode for the variable's direct children, or null.
- */
-function inferVariableCompletions(varName: string, docText: string): CompletionNode | null {
-  const escaped = escapeRegExp(varName);
-
-  // Build a combined regex that captures all three patterns at once.
-  // Group layout (each arm has declaration and bare-assignment alternatives):
-  //   Pattern 1 (new): groups 1,2 = ClassName
-  //   Pattern 2 (static method call): groups 3,4 = ClassName; groups 5,6 = methodName
-  //   Pattern 3 (dotted path, no call): groups 7,8 = full path
-  const combined = new RegExp(
-    // Pattern 1a: (const|let|var) x = [await] new ClassName
-    `(?:const|let|var)\\s+${escaped}\\s*=\\s*(?:await\\s+)?new\\s+(\\w+)` +
-    // Pattern 1b: x = [await] new ClassName  (bare assignment)
-    `|(?:^|[;\\n])\\s*${escaped}\\s*=\\s*(?:await\\s+)?new\\s+(\\w+)` +
-    // Pattern 2a: (const|let|var) x = [await] Class.method(
-    `|(?:const|let|var)\\s+${escaped}\\s*=\\s*(?:await\\s+)?(\\w+)\\.(\\w+)\\s*\\(` +
-    // Pattern 2b: x = [await] Class.method(   (bare assignment)
-    `|(?:^|[;\\n])\\s*${escaped}\\s*=\\s*(?:await\\s+)?(\\w+)\\.(\\w+)\\s*\\(` +
-    // Pattern 3a: (const|let|var) x = dotted.path  (not followed by open-paren)
-    `|(?:const|let|var)\\s+${escaped}\\s*=\\s*(?:await\\s+)?(\\w+(?:\\.\\w+)*)(?!\\s*\\()` +
-    // Pattern 3b: x = dotted.path  (bare assignment, not followed by open-paren)
-    `|(?:^|[;\\n])\\s*${escaped}\\s*=\\s*(?:await\\s+)?(\\w+(?:\\.\\w+)*)(?!\\s*\\()`,
-    "m"
-  );
-
-  const m = docText.match(combined);
-  if (!m) return null;
-
-  // Pattern 1: new ClassName(...)
-  const newClass = m[1] || m[2];
-  if (newClass && COMPLETION_TREE[newClass]) {
-    return getInstanceCompletions(newClass);
-  }
-
-  // Pattern 2: ClassName.method(...)
-  const className = m[3] || m[5];
-  const methodName = m[4] || m[6];
-  if (className && methodName) {
-    const classEntry = COMPLETION_TREE[className];
-    if (classEntry) {
-      const visible = getVisibleChildren(classEntry);
-      const methodEntry = visible[methodName];
-      if (methodEntry) {
-        const returnTypeName = resolveMethodReturnType(methodEntry, methodName, classEntry, className);
-        if (returnTypeName) return getInstanceCompletions(returnTypeName);
-      }
-    }
-  }
-
-  // Pattern 3: dotted.path assignment (not a function call)
-  const fullPath = m[7] || m[8];
-  if (fullPath) {
-    const segments = fullPath.split(".");
-    let entry: CompletionEntry | undefined = COMPLETION_TREE[segments[0]];
-    if (entry) {
-      for (let i = 1; i < segments.length && entry; i++) {
-        const visible = getVisibleChildren(entry);
-        entry = visible[segments[i]];
-      }
-      if (entry) {
-        const result = getVisibleChildren(entry);
-        if (Object.keys(result).length > 0) return result;
-      }
-    }
-  }
-
   return null;
 }
 
@@ -1938,15 +1845,27 @@ function resolveInternals(view: any): boolean {
  * to inject context-specific variables for condition expression editors.
  */
 const elementContextCompletions = new WeakMap<HTMLElement, CompletionNode>();
+/** Optional Blockly category specification for the visual editor toolbox.
+ *  Keys are category display names, values are maps of JS path → completion entry.
+ *  When provided, the Blockly editor shows only these categories. */
+const elementBlocklyCategories = new WeakMap<HTMLElement, Record<string, Record<string, any>>>();
 /** Map from EditorView to the element it was enhanced from, for context completion lookups. */
 const viewToElement = new WeakMap<any, HTMLElement>();
 
-function setContextCompletions(element: HTMLElement, completions: CompletionNode): void {
+function setContextCompletions(
+  element: HTMLElement,
+  completions: CompletionNode,
+  blocklyCategories?: Record<string, Record<string, any>>
+): void {
   elementContextCompletions.set(element, completions);
+  if (blocklyCategories) {
+    elementBlocklyCategories.set(element, blocklyCategories);
+  }
 }
 
 function clearContextCompletions(element: HTMLElement): void {
   elementContextCompletions.delete(element);
+  elementBlocklyCategories.delete(element);
 }
 
 // ── Enhancement ──
@@ -2032,6 +1951,9 @@ async function enhanceCodeMirror(element: HTMLElement): Promise<void> {
       }
     }, true); // Use capture phase to intercept before CodeMirror
 
+    // Add visual editor toggle button
+    addVisualEditorToggle(element);
+
     console.log("macro-autocomplete | Injected autocompletions with Tab completion");
   } catch (err) {
     console.error("macro-autocomplete | Error injecting completions:", err);
@@ -2044,6 +1966,11 @@ function initMacroAutoComplete(): void {
   if (typeof window === "undefined" || typeof document === "undefined") return;
 
   console.log("macro-autocomplete | Initializing macro autocompletion");
+
+  // Wire up the shared completion resolver with our tree reference.
+  // Since this is a reference (not a copy), all subsequent mutations
+  // (schema injection, prototype injection, etc.) are visible to the resolver.
+  setCompletionTree(COMPLETION_TREE);
 
   // Inject schema-generated completions from dnd5e DataModels (if dnd5e is installed)
   injectSchemaCompletions();
@@ -2081,5 +2008,207 @@ function initMacroAutoComplete(): void {
   });
 }
 
+// ── Visual Editor (Blockly) Integration ──
+
+/** Lazy-loaded Blockly editor module */
+let blocklyModule: typeof import("./blockly/editor") | null = null;
+/** Whether the Blockly module has been initialized with the completion tree */
+let blocklyInitialized = false;
+
+/**
+ * Lazily load and initialize the Blockly visual editor module.
+ * Returns the module, or null if loading fails.
+ */
+async function getBlocklyModule(): Promise<typeof import("./blockly/editor") | null> {
+  if (blocklyModule) return blocklyModule;
+  try {
+    blocklyModule = await import("./blockly/editor");
+    if (!blocklyInitialized) {
+      blocklyModule.initBlockly(COMPLETION_TREE);
+      blocklyInitialized = true;
+    }
+    return blocklyModule;
+  } catch (err) {
+    console.error("macro-autocomplete | Failed to load Blockly visual editor:", err);
+    return null;
+  }
+}
+
+/** Set of code-mirror elements that have had the visual toggle button added */
+const visualToggleElements = new WeakSet<HTMLElement>();
+
+/**
+ * Add a "Visual Editor" toggle button next to a code-mirror element.
+ * The button appears as a small icon/label above the editor.
+ */
+function addVisualEditorToggle(codeMirrorElement: HTMLElement): void {
+  if (!(game as any).settings.get(MODULE_ID, "enableVisualEditor")) return;
+  if (visualToggleElements.has(codeMirrorElement)) return;
+  visualToggleElements.add(codeMirrorElement);
+
+  // Find or create a toolbar container above the code-mirror element
+  const parent = codeMirrorElement.parentElement;
+  if (!parent) return;
+
+  const toolbar = document.createElement("div");
+  toolbar.className = "mac-editor-toolbar";
+
+  const toggleBtn = document.createElement("button");
+  toggleBtn.type = "button";
+  toggleBtn.className = "mac-visual-toggle";
+  toggleBtn.innerHTML = '<i class="fas fa-puzzle-piece"></i> Visual Editor';
+  toggleBtn.title = "Toggle between text and visual block editor";
+
+  let editor: any = null;
+
+  toggleBtn.addEventListener("click", async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const mod = await getBlocklyModule();
+    if (!mod) {
+      ui?.notifications?.error?.("Failed to load visual editor");
+      return;
+    }
+
+    if (!editor) {
+      editor = mod.getOrCreateEditor(codeMirrorElement);
+    }
+
+    // Pass context-specific Blockly categories (e.g., condition sandbox) to the editor.
+    const blocklyCats = elementBlocklyCategories.get(codeMirrorElement);
+    editor.setContextCategories(blocklyCats ?? null);
+
+    editor.toggle();
+
+    if (editor.active) {
+      toggleBtn.innerHTML = '<i class="fas fa-code"></i> Text Editor';
+      toggleBtn.classList.add("active");
+    } else {
+      toggleBtn.innerHTML = '<i class="fas fa-puzzle-piece"></i> Visual Editor';
+      toggleBtn.classList.remove("active");
+    }
+  });
+
+  toolbar.appendChild(toggleBtn);
+  parent.insertBefore(toolbar, codeMirrorElement);
+}
+
+/**
+ * Inject CSS styles for the visual editor integration.
+ */
+function injectVisualEditorStyles(): void {
+  if (document.getElementById("mac-visual-editor-styles")) return;
+
+  const style = document.createElement("style");
+  style.id = "mac-visual-editor-styles";
+  style.textContent = `
+    .mac-editor-toolbar {
+      display: flex;
+      justify-content: flex-end;
+      padding: 2px 4px;
+      gap: 4px;
+    }
+
+    .mac-visual-toggle {
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 4px;
+      color: #b0b0b0;
+      cursor: pointer;
+      font-size: 11px;
+      padding: 3px 8px;
+      transition: all 0.15s ease;
+      font-family: inherit;
+      line-height: 1.4;
+    }
+
+    .mac-visual-toggle:hover {
+      background: rgba(255, 255, 255, 0.15);
+      color: #e0e0e0;
+    }
+
+    .mac-visual-toggle.active {
+      background: rgba(59, 130, 246, 0.25);
+      border-color: rgba(59, 130, 246, 0.5);
+      color: #93bbfc;
+    }
+
+    .mac-visual-toggle i {
+      margin-right: 4px;
+    }
+
+    .mac-blockly-container {
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 4px;
+      overflow: hidden;
+      min-height: 400px;
+    }
+
+    /* Ensure Blockly dropdowns and tooltips render above Foundry dialogs */
+    .blocklyWidgetDiv,
+    .blocklyDropDownDiv,
+    .blocklyTooltipDiv {
+      z-index: 10000 !important;
+    }
+
+    /* Style the Blockly toolbox to match Foundry's dark theme */
+    .blocklyToolboxDiv {
+      background: #16213e !important;
+    }
+
+    .blocklyTreeLabel {
+      color: #e0e0e0 !important;
+    }
+
+    .blocklyTreeRow:hover {
+      background: rgba(255, 255, 255, 0.1) !important;
+    }
+
+    /* Make the HTML editing input legible on dark Foundry backgrounds */
+    .blocklyWidgetDiv .blocklyHtmlInput {
+      color: #ffffff !important;
+      background: rgba(0, 0, 0, 0.7) !important;
+    }
+
+    /* Blockly dims shadow blocks via opacity — ensure text stays readable */
+    .blocklyShadow .blocklyText {
+      fill: #000000 !important;
+    }
+  `;
+  document.head.appendChild(style);
+}
+
+const MODULE_ID = "macro-autocomplete";
+
+// Register settings before ready
+Hooks.once("init", () => {
+  (game as any).settings.register(MODULE_ID, "enableVisualEditor", {
+    name: "Enable Visual Editor",
+    hint: "Show the Visual Editor toggle button on macro and condition editors. Requires reload.",
+    scope: "client",
+    config: true,
+    type: Boolean,
+    default: true,
+    requiresReload: true,
+  });
+
+});
+
 // Module entry point
-Hooks.once("ready", () => initMacroAutoComplete());
+Hooks.once("ready", () => {
+  initMacroAutoComplete();
+  if ((game as any).settings.get(MODULE_ID, "enableVisualEditor")) {
+    injectVisualEditorStyles();
+  }
+
+});
+
+// Re-introspect canvas once a scene renders (dimensions, scene, etc. are null until then)
+Hooks.once("canvasReady", () => {
+  const g = globalThis as any;
+  if (!g.canvas || !COMPLETION_TREE.canvas) return;
+  const canvasMembers = objectToCompletions(g.canvas, 4);
+  mergeCompletions(COMPLETION_TREE.canvas, canvasMembers);
+  console.log(`macro-autocomplete | canvasReady: re-injected ${Object.keys(canvasMembers).length} canvas members`);
+});

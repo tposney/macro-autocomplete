@@ -64,8 +64,9 @@ function buildSourceEsbuild(minifySources = false, output = null) {
     await esbuild.build({
       entryPoints: ["src/macro-autocomplete.ts"],
       bundle: true,
+      splitting: true,
       format: "esm",
-      outfile: path.join(outdir, "macro-autocomplete.js"),
+      outdir: outdir,
       sourcemap: true,
       sourcesContent: true,
       minify: minifySources,
@@ -73,24 +74,31 @@ function buildSourceEsbuild(minifySources = false, output = null) {
       target: "es2022",
       platform: "browser",
       logLevel: "info",
+      // Ensure entry point gets a predictable name
+      entryNames: "[name]",
+      chunkNames: "chunks/[name]-[hash]",
     });
 
-    // Fix source map paths
+    // Fix source map paths for the main entry point
     const jsFile = path.join(outdir, "macro-autocomplete.js");
     const mapFile = path.join(outdir, "macro-autocomplete.js.map");
-    const map = JSON.parse(fs.readFileSync(mapFile, "utf8"));
-    delete map.sourceRoot;
-    map.sources = map.sources.map(s => {
-      const match = s.match(/src\/(lib\/|macro-autocomplete\.ts).*$/);
-      return match ? "src/" + match[0].substring(4) : s;
-    });
-    fs.writeFileSync(mapFile, JSON.stringify(map));
+    if (fs.existsSync(mapFile)) {
+      const map = JSON.parse(fs.readFileSync(mapFile, "utf8"));
+      delete map.sourceRoot;
+      map.sources = map.sources.map(s => {
+        const match = s.match(/src\/(lib\/|blockly\/|vista\/|macro-autocomplete\.ts).*$/);
+        return match ? "src/" + match[0].substring(4) : s;
+      });
+      fs.writeFileSync(mapFile, JSON.stringify(map));
+    }
 
     // Ensure sourceMappingURL is present
-    let js = fs.readFileSync(jsFile, "utf8");
-    if (!js.includes("sourceMappingURL")) {
-      js += "\n//# sourceMappingURL=macro-autocomplete.js.map\n";
-      fs.writeFileSync(jsFile, js);
+    if (fs.existsSync(jsFile)) {
+      let js = fs.readFileSync(jsFile, "utf8");
+      if (!js.includes("sourceMappingURL")) {
+        js += "\n//# sourceMappingURL=macro-autocomplete.js.map\n";
+        fs.writeFileSync(jsFile, js);
+      }
     }
   };
 }
@@ -116,6 +124,13 @@ function buildManifest(output = null) {
 
 function outputMetaFiles(output = null) {
   return () => gulp.src(["LICENSE", "README.md"], { allowEmpty: true }).pipe(gulp.dest(output || DIST));
+}
+
+/**
+ * Copy Handlebars templates to output directory
+ */
+function copyTemplates(output = null) {
+  return () => gulp.src("templates/**/*", { allowEmpty: true }).pipe(gulp.dest((output || DIST) + "templates/"));
 }
 
 /**
@@ -147,6 +162,7 @@ exports.default = gulp.series(
     buildSourceEsbuild(false, DIST),
     buildManifest(),
     outputMetaFiles(),
+    copyTemplates(),
   ),
 );
 
@@ -160,6 +176,7 @@ exports.dev = gulp.series(
     buildSourceEsbuild(false, DEV_DIST()),
     buildManifest(DEV_DIST()),
     outputMetaFiles(DEV_DIST()),
+    copyTemplates(DEV_DIST()),
   ),
 );
 
@@ -173,6 +190,7 @@ exports.zip = gulp.series(
     buildSourceEsbuild(false, DIST),
     buildManifest(),
     outputMetaFiles(),
+    copyTemplates(),
   ),
   compressDistribution(),
   pdel([DIST]),
@@ -186,6 +204,7 @@ exports.watch = function () {
   gulp.watch(SOURCE + GLOB, buildSourceEsbuild(false, DIST));
   gulp.watch(["module.json", "package.json"], buildManifest());
   gulp.watch(["LICENSE", "README.md"], outputMetaFiles());
+  gulp.watch("templates/**/*", copyTemplates());
 };
 
 /**
@@ -209,5 +228,9 @@ exports.devWatch = function () {
   gulp.watch(
     ["LICENSE", "README.md"],
     gulp.series(outputMetaFiles(devDist), plog("metas done.")),
+  );
+  gulp.watch(
+    "templates/**/*",
+    gulp.series(copyTemplates(devDist), plog("templates done.")),
   );
 };

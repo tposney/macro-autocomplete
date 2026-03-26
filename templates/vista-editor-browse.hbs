@@ -1,0 +1,46 @@
+<div class="vista-browse-wrapper">
+  <div class="vista-browse-toolbar flexrow">
+    <button type="button" data-action="createVista">
+      <i class="fa-solid fa-plus"></i> New Vista
+    </button>
+    <button type="button" data-action="importVista">
+      <i class="fa-solid fa-file-import"></i> Import JSON
+    </button>
+  </div>
+
+  <div class="vista-browse-grid">
+    {{#each vistas as |vista|}}
+    <div class="vista-card {{#if vista.custom}}custom{{else}}builtin{{/if}}"
+         data-vista-id="{{vista.id}}">
+      <div class="vista-card-thumb">
+        {{#if vista.thumbnail}}
+        <img src="{{vista.thumbnail}}" alt="{{vista.label}}">
+        {{else}}
+        <div class="vista-card-placeholder">
+          <i class="fa-solid fa-mountain-sun"></i>
+        </div>
+        {{/if}}
+      </div>
+      <div class="vista-card-body">
+        <span class="vista-card-label">{{vista.label}}</span>
+        <span class="vista-card-meta">
+          {{vista.compositionCount}} compositions
+          {{#if vista.sceneCount}} &middot; {{vista.sceneCount}} scenes{{/if}}
+        </span>
+      </div>
+      <div class="vista-card-actions">
+        <a data-action="selectVista" data-vista-id="{{vista.id}}"
+           data-tooltip="Edit"><i class="fa-solid fa-pen-to-square"></i></a>
+        <a data-action="duplicateVista" data-vista-id="{{vista.id}}"
+           data-tooltip="Duplicate as Custom"><i class="fa-solid fa-copy"></i></a>
+        {{#if vista.custom}}
+        <a data-action="exportVista" data-vista-id="{{vista.id}}"
+           data-tooltip="Export JSON"><i class="fa-solid fa-file-export"></i></a>
+        <a data-action="deleteVista" data-vista-id="{{vista.id}}"
+           data-tooltip="Delete"><i class="fa-solid fa-trash"></i></a>
+        {{/if}}
+      </div>
+    </div>
+    {{/each}}
+  </div>
+</div>
