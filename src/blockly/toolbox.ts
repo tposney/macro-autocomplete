@@ -530,6 +530,7 @@ export function buildToolbox(categories: Map<string, string[]>): ToolboxDef {
     contents: [
       { kind: "block", type: "mac_const" },
       { kind: "block", type: "mac_let" },
+      { kind: "block", type: "mac_assignment" },
       { kind: "block", type: "mac_typed_var" },
     ],
   });

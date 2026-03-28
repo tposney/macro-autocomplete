@@ -1552,6 +1552,48 @@ export function registerBuiltinBlocks(): void {
     registeredBlocks.add(letType);
   }
 
+  // "target op value" assignment block (supports =, +=, -=, ??=, etc.)
+  const assignType = "mac_assignment";
+  if (!registeredBlocks.has(assignType)) {
+    Blockly.common.defineBlocksWithJsonArray([
+      {
+        type: assignType,
+        message0: "%1 %2 %3",
+        args0: [
+          { type: "input_value", name: "TARGET" },
+          {
+            type: "field_dropdown",
+            name: "OP",
+            options: [
+              ["=", "="],
+              ["+=", "+="],
+              ["-=", "-="],
+              ["*=", "*="],
+              ["/=", "/="],
+              ["??=", "??="],
+              ["||=", "||="],
+              ["&&=", "&&="],
+            ],
+          },
+          { type: "input_value", name: "VALUE" },
+        ],
+        inputsInline: true,
+        previousStatement: null,
+        nextStatement: null,
+        colour: 330,
+        tooltip: "Assign a value to a variable or property",
+        extensions: ["mac_shadow_values"],
+      },
+    ]);
+    javascriptGenerator.forBlock[assignType] = function (block: Blockly.Block) {
+      const target = javascriptGenerator.valueToCode(block, "TARGET", Order.NONE) || "x";
+      const op = block.getFieldValue("OP");
+      const value = javascriptGenerator.valueToCode(block, "VALUE", Order.NONE) || "undefined";
+      return `${target} ${op} ${value};\n`;
+    };
+    registeredBlocks.add(assignType);
+  }
+
   // "return" block (for early returns in macros)
   const returnType = "mac_return";
   if (!registeredBlocks.has(returnType)) {
