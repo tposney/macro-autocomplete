@@ -1686,11 +1686,17 @@ function updateSignatureHint(view: any): void {
 function getEditorView(element: HTMLElement): any | null {
   // @ts-expect-error - check for exposed view property
   if (element.view) return element.view;
-  for (const selector of [".cm-editor", ".cm-content", ".cm-scroller"]) {
+
+  // v14 CodeMirror 6.39+: .cmView replaced with .cmTile
+  // Replicates EditorView.findFromDOM: find .cm-content, get cmTile, walk .root.view
+  for (const selector of [".cm-content", ".cm-editor"]) {
     const el = element.querySelector(selector);
     // @ts-expect-error - CodeMirror internal
-    if (el?.cmView?.view) return el.cmView.view;
+    const tile = el?.cmTile;
+    const root = tile?.root ?? tile;
+    if (root?.view) return root.view;
   }
+
   return null;
 }
 

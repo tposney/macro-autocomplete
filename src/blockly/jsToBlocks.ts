@@ -1614,12 +1614,39 @@ function connectCallArguments(
 }
 
 /**
- * Convert an assignment expression to a raw statement block.
+ * Convert an assignment expression to a mac_assignment block.
+ * Supports =, +=, -=, *=, /=, ??=, ||=, &&=.
  */
 function assignmentToBlock(
   node: any,
   source: string,
   workspace: Blockly.WorkspaceSvg
 ): Blockly.Block {
-  return rawStatementBlock(nodeSource(node, source), workspace);
+  const supportedOps = ["=", "+=", "-=", "*=", "/=", "??=", "||=", "&&="];
+  if (!supportedOps.includes(node.operator)) {
+    return rawStatementBlock(nodeSource(node, source), workspace);
+  }
+
+  const block = workspace.newBlock("mac_assignment");
+  block.setFieldValue(node.operator, "OP");
+
+  const targetBlock = expressionToBlock(node.left, source, workspace);
+  if (targetBlock) {
+    initBlock(targetBlock);
+    const targetConn = block.getInput("TARGET")?.connection;
+    if (targetConn && targetBlock.outputConnection) {
+      targetConn.connect(targetBlock.outputConnection);
+    }
+  }
+
+  const valueBlock = expressionToBlock(node.right, source, workspace);
+  if (valueBlock) {
+    initBlock(valueBlock);
+    const valueConn = block.getInput("VALUE")?.connection;
+    if (valueConn && valueBlock.outputConnection) {
+      valueConn.connect(valueBlock.outputConnection);
+    }
+  }
+
+  return block;
 }

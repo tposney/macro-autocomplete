@@ -423,10 +423,14 @@ export class BlocklyEditor {
    */
   private getEditorView(): any {
     const cmEl = this.codeMirrorElement as any;
-    if (cmEl.cmView?.view) return cmEl.cmView.view;
     if (cmEl._view) return cmEl._view;
-    const cmContent = cmEl.querySelector?.(".cm-content");
-    if (cmContent?.cmView?.view) return cmContent.cmView.view;
+    // v14 CodeMirror 6.39+: .cmView replaced with .cmTile
+    for (const selector of [".cm-content", ".cm-editor"]) {
+      const el = cmEl.querySelector?.(selector);
+      const tile = el?.cmTile;
+      const root = tile?.root ?? tile;
+      if (root?.view) return root.view;
+    }
     return null;
   }
 
