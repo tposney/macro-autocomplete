@@ -22,6 +22,6 @@
   },
   "bugs": "https://gitlab.com/tposney/macro-autocomplete/-/issues",
   "url": "https://gitlab.com/tposney/macro-autocomplete",
-  "manifest": "https://gitlab.com/tposney/macro-autocomplete/raw/v14/package/module.json",
+  "manifest": "https://tposney.gitlab.io/macro-autocomplete/v14/module.json",
   "download": "https://gitlab.com/tposney/macro-autocomplete/raw/v14/package/macro-autocomplete-v{{version}}.zip"
 }
