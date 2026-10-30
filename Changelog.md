@@ -1,6 +1,10 @@
 # Changelog
 
-## 1.1.0
+## 1.0.2
+
+- Updates are served from GitLab Pages (https://tposney.gitlab.io/macro-autocomplete/v13/module.json), so update checks no longer fail when GitLab rate-limits repository files.
+
+## 1.0.1
 
 ### Visual Block Editor
 
@@ -60,7 +64,7 @@
 - Dark theme matching the Foundry VTT interface
 - Zoom controls, grid snapping, trashcan
 
-## 1.0.1
+## 1.0.0
 
 - Initial release with CodeMirror 6 autocompletion
 - Tab key completion acceptance
