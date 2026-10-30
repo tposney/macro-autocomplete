@@ -39,9 +39,10 @@ release_job:
           filepath: '/$PACKAGE_TYPE.json'
 
 # Update files for Foundry, served from GitLab Pages (limited per visitor, not per file like raw repository files):
-# <pages url>/<line>/module.json, the zip it names and changelog.html, for each release line's branch head, plus an
-# index page. GitLab replaces the whole site on each deployment, so every line is rebuilt. Runs on a release tag, by
-# hand (Run pipeline) or by trigger token.
+# <pages url>/<line>/module.json, the zip it names and changelog.html, for each release line's branch head; and
+# versions/<version>/module.json with its zip for each release tag whose manifest is on Pages (foundryvtt.com's
+# version entries); plus an index page. GitLab replaces the whole site on each deployment, so everything is rebuilt.
+# Runs on a release tag, by hand (Run pipeline) or by trigger token.
 pages:
   stage: publish
   image: alpine:latest
@@ -86,10 +87,26 @@ pages:
         lines_html="$lines_html<li><strong>$line</strong> $version: <a href=\"$line/$PACKAGE_TYPE.json\">manifest</a>${changelog:+, <a href=\"$line/changelog.html\">changelog</a>}</li>"
         echo "$line: $version $zip${changelog:+ (changelog)}"
       done
+      # Each release whose manifest is on Pages also keeps its own manifest and zip, for foundryvtt.com's version entries
+      git fetch --quiet --tags origin
+      versions_html=""
+      for tag in $(git tag --list 'v*' --sort=-creatordate); do
+        git cat-file -e "$tag:package/$PACKAGE_TYPE.json" 2>/dev/null || continue
+        git show "$tag:package/$PACKAGE_TYPE.json" > tag-manifest.json
+        case "$(jq -r .manifest tag-manifest.json)" in "$CI_PAGES_URL"/*) ;; *) continue ;; esac
+        version=$(jq -r .version tag-manifest.json)
+        zip=$(basename "$(jq -r .download tag-manifest.json)")
+        git cat-file -e "$tag:package/$zip" 2>/dev/null || { echo "$tag: no package/$zip, skipped"; continue; }
+        mkdir -p "public/versions/$version"
+        git show "$tag:package/$zip" > "public/versions/$version/$zip"
+        jq --arg download "$CI_PAGES_URL/versions/$version/$zip" '.download = $download' tag-manifest.json > "public/versions/$version/$PACKAGE_TYPE.json"
+        versions_html="$versions_html<li><a href=\"versions/$version/$PACKAGE_TYPE.json\">$version</a></li>"
+        echo "versions/$version: $zip"
+      done
       {
         printf '<!doctype html>\n<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">\n'
         printf '<title>%s</title><style>:root{color-scheme:light dark}body{font:16px/1.5 system-ui,sans-serif;max-width:52rem;margin:2rem auto;padding:0 1rem}</style>\n' "$PACKAGE_NAME"
-        printf '</head><body><h1>%s</h1><p>Install or update in Foundry with the manifest URL of your release line.</p><ul>%s</ul></body></html>\n' "$PACKAGE_NAME" "$lines_html"
+        printf '</head><body><h1>%s</h1><p>Install or update in Foundry with the manifest URL of your release line.</p><ul>%s</ul><h2>Versions</h2><p>Each release'"'"'s own manifest (for installing that version):</p><ul>%s</ul></body></html>\n' "$PACKAGE_NAME" "$lines_html" "$versions_html"
       } > public/index.html
   artifacts:
     paths:
