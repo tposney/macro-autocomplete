@@ -39,8 +39,9 @@ release_job:
           filepath: '/$PACKAGE_TYPE.json'
 
 # Update files for Foundry, served from GitLab Pages (limited per visitor, not per file like raw repository files):
-# <pages url>/<line>/module.json and the zip it names, for each release line's branch head. GitLab replaces the whole
-# site on each deployment, so every line is rebuilt. Runs on a release tag, by hand (Run pipeline) or by trigger token.
+# <pages url>/<line>/module.json, the zip it names and changelog.html, for each release line's branch head, plus an
+# index page. GitLab replaces the whole site on each deployment, so every line is rebuilt. Runs on a release tag, by
+# hand (Run pipeline) or by trigger token.
 pages:
   stage: publish
   image: alpine:latest
@@ -52,9 +53,11 @@ pages:
     - if: $CI_PIPELINE_SOURCE == "web"
     - if: $CI_PIPELINE_SOURCE == "trigger"
   script:
-    - apk add --no-cache git jq
+    - apk add --no-cache git jq cmark
     - |
       set -e
+      mkdir -p public
+      lines_html=""
       for line in $RELEASE_LINES; do
         git fetch --quiet origin "+refs/heads/$line:refs/remotes/origin/$line"
         git show "origin/$line:package/$PACKAGE_TYPE.json" > manifest.json
@@ -62,10 +65,32 @@ pages:
         zip=$(basename "$(jq -r .download manifest.json)")
         mkdir -p "public/$line"
         git show "origin/$line:package/$zip" > "public/$line/$zip"
-        jq --arg manifest "$CI_PAGES_URL/$line/$PACKAGE_TYPE.json" --arg download "$CI_PAGES_URL/$line/$zip" \
-          '.manifest = $manifest | .download = $download' manifest.json > "public/$line/$PACKAGE_TYPE.json"
-        echo "$line: $version $zip"
+        changelog=""
+        for f in Changelog.md CHANGELOG.md changelog.md; do
+          if git cat-file -e "origin/$line:$f" 2>/dev/null; then
+            {
+              printf '<!doctype html>\n<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">\n'
+              printf '<title>%s %s changelog</title>\n' "$PACKAGE_NAME" "$line"
+              printf '<style>:root{color-scheme:light dark}body{font:16px/1.5 system-ui,sans-serif;max-width:52rem;margin:2rem auto;padding:0 1rem}code{font-size:.9em}</style>\n'
+              printf '</head><body>\n'
+              git show "origin/$line:$f" | cmark
+              printf '</body></html>\n'
+            } > "public/$line/changelog.html"
+            changelog="$CI_PAGES_URL/$line/changelog.html"
+            break
+          fi
+        done
+        jq --arg manifest "$CI_PAGES_URL/$line/$PACKAGE_TYPE.json" --arg download "$CI_PAGES_URL/$line/$zip" --arg changelog "$changelog" \
+          '.manifest = $manifest | .download = $download | if $changelog != "" then .changelog = $changelog else . end' \
+          manifest.json > "public/$line/$PACKAGE_TYPE.json"
+        lines_html="$lines_html<li><strong>$line</strong> $version: <a href=\"$line/$PACKAGE_TYPE.json\">manifest</a>${changelog:+, <a href=\"$line/changelog.html\">changelog</a>}</li>"
+        echo "$line: $version $zip${changelog:+ (changelog)}"
       done
+      {
+        printf '<!doctype html>\n<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">\n'
+        printf '<title>%s</title><style>:root{color-scheme:light dark}body{font:16px/1.5 system-ui,sans-serif;max-width:52rem;margin:2rem auto;padding:0 1rem}</style>\n' "$PACKAGE_NAME"
+        printf '</head><body><h1>%s</h1><p>Install or update in Foundry with the manifest URL of your release line.</p><ul>%s</ul></body></html>\n' "$PACKAGE_NAME" "$lines_html"
+      } > public/index.html
   artifacts:
     paths:
       - public
