@@ -93,13 +93,15 @@ pages:
       for tag in $(git tag --list 'v*' --sort=-creatordate); do
         git cat-file -e "$tag:package/$PACKAGE_TYPE.json" 2>/dev/null || continue
         git show "$tag:package/$PACKAGE_TYPE.json" > tag-manifest.json
-        case "$(jq -r .manifest tag-manifest.json)" in "$CI_PAGES_URL"/*) ;; *) continue ;; esac
+        tag_manifest=$(jq -r .manifest tag-manifest.json 2>/dev/null) || continue
+        case "$tag_manifest" in "$CI_PAGES_URL"/*) ;; *) continue ;; esac
         version=$(jq -r .version tag-manifest.json)
         zip=$(basename "$(jq -r .download tag-manifest.json)")
         git cat-file -e "$tag:package/$zip" 2>/dev/null || { echo "$tag: no package/$zip, skipped"; continue; }
         mkdir -p "public/versions/$version"
         git show "$tag:package/$zip" > "public/versions/$version/$zip"
-        jq --arg download "$CI_PAGES_URL/versions/$version/$zip" '.download = $download' tag-manifest.json > "public/versions/$version/$PACKAGE_TYPE.json"
+        jq --arg download "$CI_PAGES_URL/versions/$version/$zip" --arg changelog "${tag_manifest%/*}/changelog.html" \
+          '.download = $download | .changelog = $changelog' tag-manifest.json > "public/versions/$version/$PACKAGE_TYPE.json"
         versions_html="$versions_html<li><a href=\"versions/$version/$PACKAGE_TYPE.json\">$version</a></li>"
         echo "versions/$version: $zip"
       done
