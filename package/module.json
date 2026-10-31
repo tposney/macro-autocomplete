@@ -2,27 +2,27 @@
   "id": "macro-autocomplete",
   "title": "Macro Autocomplete",
   "description": "Autocompletion for Foundry VTT macro editors using CodeMirror 6",
-  "version": "1.0.2",
+
+  "version": "1.0.3",
   "authors": [
     {
       "name": "Tim Posney",
-      "url": "https://gitlab.com/tposney",
+      "url": "https://github.com/tposney",
       "discord": "tposney#1462",
-      "gitlab": "tposney",
+      "github": "tposney",
       "ko-fi": "tposney"
     }
   ],
   "scripts": [],
-  "esmodules": [
-    "macro-autocomplete.js"
-  ],
+  "esmodules": ["macro-autocomplete.js"],
   "compatibility": {
     "minimum": "13",
     "verified": "13.351",
     "maximum": "13.999"
   },
-  "bugs": "https://gitlab.com/tposney/macro-autocomplete/-/issues",
-  "url": "https://gitlab.com/tposney/macro-autocomplete",
-  "manifest": "https://tposney.gitlab.io/macro-autocomplete/v13/module.json",
-  "download": "https://gitlab.com/tposney/macro-autocomplete/raw/v13/package/macro-autocomplete-v1.0.2.zip"
+  "bugs": "https://github.com/tposney/macro-autocomplete/issues",
+  "url": "https://github.com/tposney/macro-autocomplete",
+  "manifest": "https://github.com/tposney/macro-autocomplete/releases/download/latest-v13/module.json",
+  "download": "https://github.com/tposney/macro-autocomplete/releases/download/v1.0.3/macro-autocomplete-v1.0.3.zip",
+  "changelog": "https://github.com/tposney/macro-autocomplete/blob/v13/Changelog.md"
 }
