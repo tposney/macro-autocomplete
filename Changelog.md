@@ -1,5 +1,9 @@
 # Changelog
 
+## 14.0.3
+
+- The project moved to GitHub (https://github.com/tposney/macro-autocomplete); updates come from GitHub releases (https://github.com/tposney/macro-autocomplete/releases/download/latest-v14/module.json). The GitLab project stays readable.
+
 ## 14.0.2
 
 - Updates are served from GitLab Pages (https://tposney.gitlab.io/macro-autocomplete/v14/module.json), so update checks no longer fail when GitLab rate-limits repository files.

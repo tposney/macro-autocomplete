@@ -139,7 +139,7 @@ api.clearContextCompletions(codeMirrorEl);
 Install from the Foundry VTT module browser, or use the manifest URL:
 
 ```
-https://gitlab.com/tposney/macro-autocomplete/raw/main/package/module.json
+https://github.com/tposney/macro-autocomplete/releases/download/latest-v14/module.json
 ```
 
 ## Compatibility

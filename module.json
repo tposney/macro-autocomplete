@@ -7,9 +7,9 @@
   "authors": [
     {
       "name": "Tim Posney",
-      "url": "https://gitlab.com/tposney",
+      "url": "https://github.com/tposney",
       "discord": "tposney#1462",
-      "gitlab": "tposney",
+      "github": "tposney",
       "ko-fi": "tposney"
     }
   ],
@@ -20,8 +20,9 @@
     "verified": "14",
     "maximum": "14.999"
   },
-  "bugs": "https://gitlab.com/tposney/macro-autocomplete/-/issues",
-  "url": "https://gitlab.com/tposney/macro-autocomplete",
-  "manifest": "https://tposney.gitlab.io/macro-autocomplete/v14/module.json",
-  "download": "https://tposney.gitlab.io/macro-autocomplete/versions/{{version}}/macro-autocomplete-v{{version}}.zip"
+  "bugs": "https://github.com/tposney/macro-autocomplete/issues",
+  "url": "https://github.com/tposney/macro-autocomplete",
+  "manifest": "https://github.com/tposney/macro-autocomplete/releases/download/latest-v14/module.json",
+  "download": "https://github.com/tposney/macro-autocomplete/releases/download/v{{version}}/macro-autocomplete-v{{version}}.zip",
+  "changelog": "https://github.com/tposney/macro-autocomplete/blob/v14/Changelog.md"
 }
